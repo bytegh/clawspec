@@ -31,7 +31,7 @@ import {
 import { getChangeDir, getRepoStatePaths, getTasksPath, resolveProjectScopedPath } from "../utils/paths.ts";
 import { loadClawSpecSkillBundle } from "../worker/skills.ts";
 import { buildAcpImplementationTurnPrompt, buildAcpPlanningTurnPrompt } from "../worker/prompts.ts";
-import { AcpWorkerClient } from "../acp/client.ts";
+import { AcpWorkerClient, type AcpWorkerEvent, type AcpWorkerStatus } from "../acp/client.ts";
 import { ClawSpecNotifier } from "./notifier.ts";
 
 type WatcherManagerOptions = {
@@ -125,6 +125,21 @@ export class WatcherManager {
     await watcher.interrupt(reason);
   }
 
+  async getWorkerRuntimeStatus(channelKeyOrProject: string | ProjectState): Promise<AcpWorkerStatus | undefined> {
+    const project = typeof channelKeyOrProject === "string"
+      ? await this.stateStore.getActiveProject(channelKeyOrProject)
+      : channelKeyOrProject;
+    if (!project?.repoPath || !project.execution?.sessionKey) {
+      return undefined;
+    }
+
+    return await this.acpClient.getSessionStatus({
+      sessionKey: project.execution.sessionKey,
+      cwd: project.repoPath,
+      agentId: resolveWorkerAgent(project, this.acpClient.agentId),
+    });
+  }
+
   private async recoverActiveWatchers(): Promise<void> {
     const projects = await this.stateStore.listActiveProjects();
     for (const project of projects) {
@@ -157,9 +172,20 @@ export class WatcherManager {
     const executionResult = await readExecutionResult(repoStatePaths.executionResultFile);
     const taskCounts = await loadTaskCounts(project) ?? project.taskCounts;
 
+    await cleanupTmpFiles(path.dirname(repoStatePaths.stateFile));
+
+    const adoptedRunningSession = await this.tryAdoptRunningSession(
+      project,
+      repoStatePaths,
+      executionResult,
+      taskCounts,
+    );
+    if (adoptedRunningSession) {
+      return;
+    }
+
     await removeIfExists(repoStatePaths.executionControlFile);
     await removeIfExists(repoStatePaths.executionResultFile);
-    await cleanupTmpFiles(path.dirname(repoStatePaths.stateFile));
 
     if (project.execution?.sessionKey) {
       try {
@@ -171,7 +197,11 @@ export class WatcherManager {
       }
     }
 
-    const isAllDone = taskCounts && taskCounts.remaining === 0;
+    const hasPendingPlanningSync = project.planningJournal?.dirty === true
+      || project.phase === "planning_sync"
+      || project.execution?.action === "plan"
+      || project.status === "planning";
+    const isAllDone = taskCounts && taskCounts.remaining === 0 && !hasPendingPlanningSync;
     if (isAllDone) {
       const summary = `All tasks for ${project.changeName} are complete (recovered after gateway restart).`;
       await writeLatestSummary(repoStatePaths, summary);
@@ -226,10 +256,15 @@ export class WatcherManager {
         mode: current.execution?.mode ?? "apply",
         action,
         state: "armed",
+        startupPhase: "queued",
         workerAgentId,
         workerSlot: "primary",
         armedAt,
         sessionKey,
+        connectedAt: undefined,
+        firstProgressAt: undefined,
+        lastStartupNoticeAt: undefined,
+        progressOffset: 0,
         restartCount: current.execution?.restartCount,
         lastRestartAt: current.execution?.lastRestartAt,
         lastFailure: current.execution?.lastFailure,
@@ -243,6 +278,94 @@ export class WatcherManager {
       : `Gateway restarted. Resuming implementation for \`${project.changeName}\`${taskLabel ? ` (task ${taskLabel.split(" ")[0]})` : ""} via background worker.`;
     await this.notifier.send(project.channelKey, notifyMessage);
     this.logger.info(`[clawspec] recovered ${project.changeName}: re-armed for ${action}.`);
+  }
+
+  private async tryAdoptRunningSession(
+    project: ProjectState,
+    repoStatePaths: ReturnType<typeof getRepoStatePaths>,
+    executionResult: ExecutionResult | null,
+    taskCounts: TaskCountSummary | undefined,
+  ): Promise<boolean> {
+    if (!project.execution?.sessionKey || project.execution.state !== "running") {
+      return false;
+    }
+    if (executionResult && isTerminalExecutionStatus(executionResult.status)) {
+      return false;
+    }
+
+    const workerAgentId = resolveWorkerAgent(project, this.acpClient.agentId);
+    const status = this.acpClient.getSessionStatus
+      ? await this.acpClient.getSessionStatus({
+        sessionKey: project.execution.sessionKey,
+        cwd: project.repoPath!,
+        agentId: workerAgentId,
+      })
+      : undefined;
+    if (!isAdoptableAcpRuntimeStatus(status)) {
+      return false;
+    }
+
+    const action = project.execution.action ?? (project.phase === "planning_sync" ? "plan" : "work");
+    const taskLabel = project.currentTask ?? (taskCounts ? `${taskCounts.complete + 1}` : undefined);
+    const summary = action === "plan"
+      ? `Recovered after gateway restart. Monitoring the running planning worker for ${project.changeName}.`
+      : `Recovered after gateway restart. Monitoring the running implementation worker for ${project.changeName}${taskLabel ? ` (task ${taskLabel.split(" ")[0]})` : ""}.`;
+
+    await removeIfExists(repoStatePaths.executionControlFile);
+    await writeLatestSummary(repoStatePaths, summary);
+
+    const recovered = await this.stateStore.updateProject(project.channelKey, (current) => ({
+      ...current,
+      status: action === "plan" ? "planning" : "running",
+      phase: action === "plan" ? "planning_sync" : "implementing",
+      pauseRequested: false,
+      cancelRequested: false,
+      blockedReason: undefined,
+      taskCounts: taskCounts ?? current.taskCounts,
+      latestSummary: summary,
+      lastExecution: executionResult ?? current.lastExecution,
+      lastExecutionAt: executionResult?.timestamp ?? current.lastExecutionAt,
+      execution: current.execution
+        ? {
+            ...current.execution,
+            action,
+            state: "running",
+            startupPhase: current.execution.firstProgressAt || (current.execution.progressOffset ?? 0) > 0
+              ? "active"
+              : (current.execution.connectedAt ? current.execution.startupPhase ?? "connected" : "connected"),
+            workerAgentId,
+            workerSlot: current.execution.workerSlot ?? "primary",
+            connectedAt: current.execution.connectedAt ?? current.execution.startedAt ?? new Date().toISOString(),
+            firstProgressAt: current.execution.firstProgressAt
+              ?? ((current.execution.progressOffset ?? 0) > 0
+                ? (current.execution.lastHeartbeatAt ?? current.execution.startedAt)
+                : undefined),
+            progressOffset: current.execution.progressOffset ?? 0,
+            lastFailure: undefined,
+          }
+        : {
+            mode: "apply",
+            action,
+            state: "running",
+            startupPhase: taskCounts && taskCounts.complete > 0 ? "active" : "connected",
+            workerAgentId,
+            workerSlot: "primary",
+            armedAt: new Date().toISOString(),
+            startedAt: new Date().toISOString(),
+            connectedAt: new Date().toISOString(),
+            sessionKey: project.execution?.sessionKey,
+            progressOffset: 0,
+          },
+    }));
+
+    await writeExecutionControlFile(repoStatePaths.executionControlFile, recovered);
+
+    const notifyMessage = action === "plan"
+      ? `Gateway restarted. Reattached to the running planning worker for \`${project.changeName}\`.`
+      : `Gateway restarted. Reattached to the running implementation worker for \`${project.changeName}\`${taskLabel ? ` (task ${taskLabel.split(" ")[0]})` : ""}.`;
+    await this.notifier.send(project.channelKey, notifyMessage);
+    this.logger.info(`[clawspec] recovered ${project.changeName}: adopted running ${action} session ${project.execution.sessionKey}.`);
+    return true;
   }
 
   private getOrCreate(channelKey: string): ExecutionWatcher {
@@ -323,8 +446,13 @@ export class WatcherManager {
           ? {
               ...current.execution,
               state: "armed",
+              startupPhase: "queued",
               startedAt: undefined,
+              connectedAt: undefined,
+              firstProgressAt: undefined,
+              lastStartupNoticeAt: undefined,
               lastHeartbeatAt: undefined,
+              progressOffset: 0,
             }
           : current.execution,
       }));
@@ -571,27 +699,45 @@ class ExecutionWatcher {
       return false;
     }
 
-    const selectedArtifactId = nextForcedArtifactId
-      ?? status.artifacts.find((artifact) =>
-        pendingRequiredIds.includes(artifact.id) && artifact.status === "ready")?.id
-      ?? status.artifacts.find((artifact) => artifact.status === "ready")?.id;
+    const selectedArtifactId = project.execution?.state === "running"
+      ? (project.execution.currentArtifact
+        ?? nextForcedArtifactId
+        ?? status.artifacts.find((artifact) => pendingRequiredIds.includes(artifact.id))?.id
+        ?? status.artifacts.find((artifact) => artifact.status === "ready")?.id)
+      : nextForcedArtifactId
+        ?? status.artifacts.find((artifact) =>
+          pendingRequiredIds.includes(artifact.id) && artifact.status === "ready")?.id
+        ?? status.artifacts.find((artifact) => artifact.status === "ready")?.id;
 
     if (!selectedArtifactId) {
       await this.blockProject(project, "Planning sync cannot continue because OpenSpec has no ready artifact to build next.");
       return false;
     }
 
-    const instructions = (await this.openSpec.instructionsArtifact(
-      project.repoPath!,
-      selectedArtifactId,
-      project.changeName!,
-    )).parsed!;
-    const runningProject = await this.setRunningState(project, {
-      action: "plan",
-      currentArtifact: selectedArtifactId,
-      workerSlot: "primary",
-    });
+    const instructions = project.execution?.state === "running"
+      ? undefined
+      : (await this.openSpec.instructionsArtifact(
+        project.repoPath!,
+        selectedArtifactId,
+        project.changeName!,
+      )).parsed!;
+    const runningProject = project.execution?.state === "running"
+      ? project
+      : await this.setRunningState(project, {
+        action: "plan",
+        currentArtifact: selectedArtifactId,
+        workerSlot: "primary",
+      });
 
+    let runError: unknown;
+    if (project.execution?.state === "running") {
+      ({ runError } = await this.runAcpTurnWithTracking(
+        runningProject,
+        repoStatePaths,
+        "",
+        { recovered: true },
+      ));
+    } else {
     await removeIfExists(repoStatePaths.executionResultFile);
     await this.notify(
       runningProject,
@@ -600,11 +746,12 @@ class ExecutionWatcher {
     );
 
     const importedSkills = await loadClawSpecSkillBundle(["explore", "propose"]);
-    const { runError } = await this.runAcpTurnWithTracking(
+    ({ runError } = await this.runAcpTurnWithTracking(
       runningProject,
       repoStatePaths,
-      buildAcpPlanningTurnPrompt({ project: runningProject, repoStatePaths, instructions, importedSkills }),
-    );
+      buildAcpPlanningTurnPrompt({ project: runningProject, repoStatePaths, instructions: instructions!, importedSkills }),
+    ));
+    }
     if (this.shutdownRequested) {
       return false;
     }
@@ -614,7 +761,7 @@ class ExecutionWatcher {
       {
         summary: `Updated ${selectedArtifactId}.`,
         currentArtifact: selectedArtifactId,
-        changedFiles: [toRepoRelative(project, instructions.outputPath)],
+        changedFiles: instructions ? [toRepoRelative(project, instructions.outputPath)] : [],
         notes: [`Updated ${selectedArtifactId}.`],
         taskCounts: (await this.stateStore.getActiveProject(this.channelKey))?.taskCounts ?? project.taskCounts,
       },
@@ -652,10 +799,14 @@ class ExecutionWatcher {
           mode: current.execution?.mode ?? "apply",
           action: "plan",
           state: "armed",
+          startupPhase: "queued",
           workerAgentId: current.execution?.workerAgentId ?? current.workerAgentId ?? this.acpClient.agentId,
           workerSlot: current.execution?.workerSlot ?? "primary",
           armedAt: rearmedAt,
           startedAt: undefined,
+          connectedAt: undefined,
+          firstProgressAt: undefined,
+          lastStartupNoticeAt: undefined,
           sessionKey: current.execution?.sessionKey ?? createWorkerSessionKey(current, {
             workerSlot: current.execution?.workerSlot ?? "primary",
             workerAgentId: current.execution?.workerAgentId ?? current.workerAgentId ?? this.acpClient.agentId,
@@ -663,6 +814,7 @@ class ExecutionWatcher {
           }),
           currentArtifact: selectedArtifactId,
           currentTaskId: undefined,
+          progressOffset: 0,
           restartCount: 0,
           lastRestartAt: undefined,
           lastFailure: undefined,
@@ -693,6 +845,21 @@ class ExecutionWatcher {
     }
 
     if (apply.state === "all_done" || apply.progress.remaining === 0) {
+      if (project.execution?.state === "running") {
+        await this.flushPendingWorkerProgress(project, repoStatePaths);
+        if (project.execution.sessionKey) {
+          try {
+            await this.acpClient.cancelSession(
+              project.execution.sessionKey,
+              "implementation already completed before watcher polling caught up",
+            );
+          } catch (error) {
+            this.logger.warn(
+              `[clawspec] failed to cancel completed session for ${project.changeName}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      }
       await this.finalizeCompletedImplementation(project, repoStatePaths, apply.progress, project.lastExecution);
       return false;
     }
@@ -716,24 +883,37 @@ class ExecutionWatcher {
         `work-starting:${project.changeName}:${project.execution?.sessionKey ?? project.execution?.armedAt ?? "unknown"}`,
       );
     }
-    const runningProject = await this.setRunningState(project, {
-      action: "work",
-      currentTaskId: firstTask.id,
-      workerSlot: "primary",
-    });
-    await removeIfExists(repoStatePaths.executionResultFile);
-    await writeUtf8(repoStatePaths.workerProgressFile, "");
+    const runningProject = project.execution?.state === "running"
+      ? project
+      : await this.setRunningState(project, {
+        action: "work",
+        currentTaskId: firstTask.id,
+        workerSlot: "primary",
+      });
 
-    const importedSkills = await loadClawSpecSkillBundle(["apply"]);
-    const { runError } = await this.runAcpTurnWithTracking(
-      runningProject,
-      repoStatePaths,
-      buildAcpImplementationTurnPrompt({
-        project: runningProject, repoStatePaths, apply,
-        task: firstTask, tasks: remainingTasks,
-        mode: runningProject.execution?.mode ?? "apply", importedSkills,
-      }),
-    );
+    let runError: unknown;
+    if (project.execution?.state === "running") {
+      ({ runError } = await this.runAcpTurnWithTracking(
+        runningProject,
+        repoStatePaths,
+        "",
+        { recovered: true },
+      ));
+    } else {
+      await removeIfExists(repoStatePaths.executionResultFile);
+      await writeUtf8(repoStatePaths.workerProgressFile, "");
+
+      const importedSkills = await loadClawSpecSkillBundle(["apply"]);
+      ({ runError } = await this.runAcpTurnWithTracking(
+        runningProject,
+        repoStatePaths,
+        buildAcpImplementationTurnPrompt({
+          project: runningProject, repoStatePaths, apply,
+          task: firstTask, tasks: remainingTasks,
+          mode: runningProject.execution?.mode ?? "apply", importedSkills,
+        }),
+      ));
+    }
     if (this.shutdownRequested) {
       return false;
     }
@@ -819,10 +999,14 @@ class ExecutionWatcher {
           mode: current.execution?.mode ?? "apply",
           action: "work",
           state: "armed",
+          startupPhase: "queued",
           workerAgentId: current.execution?.workerAgentId ?? current.workerAgentId ?? this.acpClient.agentId,
           workerSlot: current.execution?.workerSlot ?? "primary",
           armedAt: rearmedAt,
           startedAt: undefined,
+          connectedAt: undefined,
+          firstProgressAt: undefined,
+          lastStartupNoticeAt: undefined,
           sessionKey: current.execution?.sessionKey ?? createWorkerSessionKey(current, {
             workerSlot: current.execution?.workerSlot ?? "primary",
             workerAgentId: current.execution?.workerAgentId ?? current.workerAgentId ?? this.acpClient.agentId,
@@ -830,6 +1014,7 @@ class ExecutionWatcher {
           }),
           currentArtifact: undefined,
           currentTaskId: nextTaskLabel(refreshedApply)?.split(" ")[0],
+          progressOffset: 0,
           restartCount: 0,
           lastRestartAt: undefined,
           lastFailure: undefined,
@@ -848,9 +1033,10 @@ class ExecutionWatcher {
     project: ProjectState,
     repoStatePaths: ReturnType<typeof getRepoStatePaths>,
     prompt: string,
+    options?: { recovered?: boolean },
   ): Promise<{ runError: unknown }> {
     let runError: unknown;
-    let workerProgressOffset = 0;
+    let workerProgressOffset = Math.max(0, project.execution?.progressOffset ?? 0);
     let stopWatchingTerminal = false;
     let sessionCancelRequested = false;
     let forcedRunError: unknown;
@@ -858,6 +1044,15 @@ class ExecutionWatcher {
     let observedWorkerActivity = false;
     let nextStatusPollAt = 0;
     let runTurnSettled = false;
+    let connectedAtMs = Date.parse(project.execution?.connectedAt ?? "");
+    let lastStartupNoticeAtMs = Date.parse(project.execution?.lastStartupNoticeAt ?? "");
+    let firstProgressSeen = Boolean(project.execution?.firstProgressAt) || workerProgressOffset > 0;
+    if (Number.isNaN(connectedAtMs)) {
+      connectedAtMs = 0;
+    }
+    if (Number.isNaN(lastStartupNoticeAtMs)) {
+      lastStartupNoticeAtMs = 0;
+    }
     const sessionKey = project.execution?.sessionKey ?? createWorkerSessionKey(project, {
       workerSlot: project.execution?.workerSlot ?? "primary",
       workerAgentId: project.execution?.workerAgentId ?? resolveWorkerAgent(project, this.acpClient.agentId),
@@ -865,12 +1060,23 @@ class ExecutionWatcher {
     });
     const workerAgentId = project.execution?.workerAgentId ?? resolveWorkerAgent(project, this.acpClient.agentId);
     const abortController = new AbortController();
+    const initialHeartbeatAt = Date.parse(project.execution?.lastHeartbeatAt ?? project.execution?.startedAt ?? "");
+    if (!Number.isNaN(initialHeartbeatAt)) {
+      lastMeaningfulActivityAt = initialHeartbeatAt;
+    }
     const flushProgress = async () => {
       const flushed = await this.flushWorkerProgress(project, repoStatePaths, workerProgressOffset);
-      workerProgressOffset = flushed.offset;
+      if (flushed.offset !== workerProgressOffset) {
+        workerProgressOffset = flushed.offset;
+        await this.persistProgressOffset(workerProgressOffset);
+      }
       if (flushed.hadActivity) {
         lastMeaningfulActivityAt = Date.now();
         observedWorkerActivity = true;
+        if (!firstProgressSeen) {
+          firstProgressSeen = true;
+          await this.markFirstWorkerProgress(this.channelKey, new Date().toISOString());
+        }
         await this.touchHeartbeat(this.channelKey);
       }
     };
@@ -896,6 +1102,34 @@ class ExecutionWatcher {
             })
             : undefined;
           if (
+            !persisted
+            && !firstProgressSeen
+            && connectedAtMs > 0
+            && now - connectedAtMs >= WORKER_STARTUP_WAIT_NOTIFY_DELAY_MS
+            && now - lastStartupNoticeAtMs >= WORKER_STARTUP_WAIT_NOTIFY_INTERVAL_MS
+          ) {
+            const noticedAt = new Date().toISOString();
+            await this.markWorkerStartupWaiting(this.channelKey, noticedAt);
+            lastStartupNoticeAtMs = Date.parse(noticedAt);
+            await this.notify(
+              project,
+              buildWatcherStatusMessage(
+                "⏳",
+                project,
+                buildWorkerStartupWaitMessage({
+                  action: project.execution?.action ?? "work",
+                  workerAgentId,
+                  taskId: project.execution?.currentTaskId,
+                  artifactId: project.execution?.currentArtifact,
+                  elapsedMs: now - connectedAtMs,
+                  status,
+                }),
+                project.taskCounts,
+              ),
+              `work-startup-wait:${project.changeName}:${sessionKey}:${Math.floor(now / 1000)}`,
+            );
+          }
+          if (
             isDeadAcpRuntimeStatus(status)
             && (observedWorkerActivity || !isQueueOwnerUnavailableStatus(status))
             && !persisted
@@ -919,11 +1153,13 @@ class ExecutionWatcher {
             !persisted
             && !observedWorkerActivity
             && now - lastMeaningfulActivityAt >= WORKER_STARTUP_GRACE_MS
-            && shouldAbortWorkerStartup(status)
+            && (shouldAbortWorkerStartup(status)
+              || shouldAbortQueueOwnerUnavailableStartup(status, now - lastMeaningfulActivityAt))
           ) {
             await flushProgress();
             forcedRunError = new Error(
               describeWorkerStartupTimeout(status)
+              ?? describeQueueOwnerUnavailableStartup(status, now - lastMeaningfulActivityAt)
               ?? "ACP worker startup timed out before reporting progress.",
             );
             if (!sessionCancelRequested) {
@@ -941,6 +1177,32 @@ class ExecutionWatcher {
       }
       return undefined;
     })();
+    if (options?.recovered) {
+      await this.notify(
+        project,
+        buildWatcherStatusMessage(
+          "馃摙",
+          project,
+          `Gateway restarted. Reattached to ${workerAgentId}. Waiting for the next worker update.`,
+          project.taskCounts,
+        ),
+        `work-recovered:${project.changeName}:${sessionKey}:${project.execution?.startedAt ?? "unknown"}`,
+      );
+      try {
+        const winner = await watchTerminalResult;
+        if (winner === "forced" && forcedRunError) {
+          runError = forcedRunError;
+        }
+      } finally {
+        stopWatchingTerminal = true;
+        await watchTerminalResult.catch(() => undefined);
+      }
+      if (!runError && forcedRunError) {
+        runError = forcedRunError;
+      }
+      await flushProgress();
+      return { runError };
+    }
     const runTurnPromise = this.acpClient.runTurn({
       sessionKey,
       cwd: project.repoPath!,
@@ -948,6 +1210,9 @@ class ExecutionWatcher {
       text: prompt,
       signal: abortController.signal,
       onReady: async () => {
+        const connectedAt = new Date().toISOString();
+        connectedAtMs = Date.parse(connectedAt);
+        await this.markWorkerConnected(this.channelKey, connectedAt);
         await this.notify(
           project,
           buildWatcherStatusMessage(
@@ -1120,6 +1385,29 @@ class ExecutionWatcher {
     };
   }
 
+  private async flushPendingWorkerProgress(
+    project: ProjectState,
+    repoStatePaths: ReturnType<typeof getRepoStatePaths>,
+  ): Promise<void> {
+    const currentOffset = Math.max(0, project.execution?.progressOffset ?? 0);
+    const flushed = await this.flushWorkerProgress(project, repoStatePaths, currentOffset);
+    if (flushed.offset !== currentOffset) {
+      await this.persistProgressOffset(flushed.offset);
+    }
+  }
+
+  private async persistProgressOffset(offset: number): Promise<void> {
+    await this.stateStore.updateProject(this.channelKey, (current) => ({
+      ...current,
+      execution: current.execution
+        ? {
+            ...current.execution,
+            progressOffset: Math.max(0, offset),
+          }
+        : current.execution,
+    }));
+  }
+
   private async syncWorkerProgressState(project: ProjectState, event: WorkerProgressEvent): Promise<void> {
     const taskSnapshot = await loadTaskSnapshot(project);
     const fallbackCounts = deriveCountsFromWorkerEvent(project.taskCounts, event);
@@ -1157,6 +1445,8 @@ class ExecutionWatcher {
     progress: TaskCountSummary,
     priorResult?: ExecutionResult,
   ): Promise<void> {
+    await this.flushPendingWorkerProgress(project, repoStatePaths);
+
     const summary = `All tasks for ${project.changeName} are complete.`;
     const completedResult: ExecutionResult = {
       version: 1,
@@ -1320,10 +1610,14 @@ class ExecutionWatcher {
         mode: project.execution?.mode ?? runningProject.execution?.mode ?? "apply",
         action,
         state: "armed",
+        startupPhase: "queued",
         workerAgentId,
         workerSlot,
         armedAt: restartAt,
         startedAt: undefined,
+        connectedAt: undefined,
+        firstProgressAt: undefined,
+        lastStartupNoticeAt: undefined,
         sessionKey,
         triggerPrompt: project.execution?.triggerPrompt ?? runningProject.execution?.triggerPrompt,
         lastTriggerAt: project.execution?.lastTriggerAt ?? runningProject.execution?.lastTriggerAt ?? restartAt,
@@ -1334,6 +1628,7 @@ class ExecutionWatcher {
           ? (project.execution?.currentTaskId ?? runningProject.execution?.currentTaskId)
           : undefined,
         lastHeartbeatAt: undefined,
+        progressOffset: 0,
         restartCount,
         lastRestartAt: restartAt,
         lastFailure: truncatedFailure,
@@ -1380,10 +1675,14 @@ class ExecutionWatcher {
         mode: current.execution?.mode ?? "apply",
         action: patch.action,
         state: "running",
+        startupPhase: "starting",
         workerAgentId,
         workerSlot,
         armedAt: current.execution?.armedAt ?? startedAt,
         startedAt,
+        connectedAt: undefined,
+        firstProgressAt: undefined,
+        lastStartupNoticeAt: undefined,
         sessionKey,
         backendId: current.execution?.backendId,
         triggerPrompt: current.execution?.triggerPrompt,
@@ -1391,6 +1690,7 @@ class ExecutionWatcher {
         currentArtifact: patch.currentArtifact,
         currentTaskId: patch.currentTaskId,
         lastHeartbeatAt: startedAt,
+        progressOffset: 0,
         restartCount: current.execution?.restartCount,
         lastRestartAt: current.execution?.lastRestartAt,
         lastFailure: current.execution?.lastFailure,
@@ -1408,6 +1708,48 @@ class ExecutionWatcher {
         ? {
             ...current.execution,
             lastHeartbeatAt: timestamp,
+          }
+        : current.execution,
+    }));
+  }
+
+  private async markWorkerConnected(channelKey: string, connectedAt: string): Promise<void> {
+    await this.stateStore.updateProject(channelKey, (current) => ({
+      ...current,
+      execution: current.execution
+        ? {
+            ...current.execution,
+            startupPhase: current.execution.firstProgressAt ? "active" : "connected",
+            connectedAt: current.execution.connectedAt ?? connectedAt,
+            lastHeartbeatAt: connectedAt,
+          }
+        : current.execution,
+    }));
+  }
+
+  private async markWorkerStartupWaiting(channelKey: string, noticedAt: string): Promise<void> {
+    await this.stateStore.updateProject(channelKey, (current) => ({
+      ...current,
+      execution: current.execution
+        ? {
+            ...current.execution,
+            startupPhase: current.execution.firstProgressAt ? "active" : "waiting_for_update",
+            lastStartupNoticeAt: noticedAt,
+          }
+        : current.execution,
+    }));
+  }
+
+  private async markFirstWorkerProgress(channelKey: string, firstProgressAt: string): Promise<void> {
+    await this.stateStore.updateProject(channelKey, (current) => ({
+      ...current,
+      execution: current.execution
+        ? {
+            ...current.execution,
+            startupPhase: "active",
+            firstProgressAt: current.execution.firstProgressAt ?? firstProgressAt,
+            lastHeartbeatAt: firstProgressAt,
+            lastStartupNoticeAt: undefined,
           }
         : current.execution,
     }));
@@ -1959,6 +2301,8 @@ function isRecoverableAcpFailure(message: string): boolean {
     /\btimed out\b/,
     /\baborted\b/,
     /worker session became unavailable/,
+    /queue owner unavailable/,
+    /startup stalled/,
     /\becconnreset\b/,
     /\beconnrefused\b/,
     /\bepipe\b/,
@@ -2018,10 +2362,59 @@ function buildWorkerRestartMessage(params: {
   delayMs: number;
 }): string {
   if (isUnavailableAcpBackendFailure(params.failureMessage)) {
-    return `Worker restarted (attempt ${params.restartCount}), but ACPX is unavailable. Next: enable \`plugins.entries.acpx\` and backend \`acpx\`, or install/load \`acpx\`.`;
+    return `Restarting ACP worker (attempt ${params.restartCount}) failed because ACPX is unavailable. Next: enable \`plugins.entries.acpx\` and backend \`acpx\`, or install/load \`acpx\`.`;
   }
   const retryDelaySeconds = Math.ceil(params.delayMs / 1000);
-  return `Worker restarted (attempt ${params.restartCount}). Next: retry ${params.nextDetail} in ${retryDelaySeconds}s.`;
+  const retryTarget = formatWorkerRetryTarget(params.action, params.nextDetail);
+  return `Restarting ACP worker (attempt ${params.restartCount}). Next: retry ${retryTarget} in ${retryDelaySeconds}s.`;
+}
+
+function formatWorkerRetryTarget(
+  action: ProjectExecutionState["action"],
+  nextDetail: string,
+): string {
+  const trimmed = nextDetail.trim();
+  if (!trimmed) {
+    return action === "plan" ? "the next planning artifact" : "the next task";
+  }
+  if (action === "plan") {
+    if (/\b(artifact|planning)\b/i.test(trimmed)) {
+      return trimmed;
+    }
+    return `planning artifact ${trimmed}`;
+  }
+  if (/\btask\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  return `task ${trimmed}`;
+}
+
+function buildWorkerStartupWaitMessage(params: {
+  action: ProjectExecutionState["action"];
+  workerAgentId: string;
+  taskId?: string;
+  artifactId?: string;
+  elapsedMs: number;
+  status: Awaited<ReturnType<AcpWorkerClient["getSessionStatus"]>> | undefined;
+}): string {
+  const elapsed = formatStartupWaitDuration(params.elapsedMs);
+  const target = params.action === "plan"
+    ? (params.artifactId ? `artifact ${params.artifactId}` : "the next planning artifact")
+    : (params.taskId ? `task ${params.taskId}` : "the next task");
+  if (isQueueOwnerUnavailableStatus(params.status)) {
+    return `ACP worker is still waiting for runtime queue ownership for ${target} with ${params.workerAgentId} (${elapsed}). Next: retry ${target} as soon as the queue becomes available.`;
+  }
+  return `ACP worker is alive with ${params.workerAgentId} and still preparing ${target} (${elapsed}). Next: the first visible progress update should appear after context loading finishes.`;
+}
+
+function formatStartupWaitDuration(elapsedMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(elapsedMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
 }
 
 function computeWorkerRestartDelayMs(restartCount: number): number {
@@ -2107,6 +2500,15 @@ function isQueueOwnerUnavailableStatus(
   return summary.includes("queue owner unavailable");
 }
 
+function isAdoptableAcpRuntimeStatus(
+  status: Awaited<ReturnType<AcpWorkerClient["getSessionStatus"]>>,
+): boolean {
+  if (!status) {
+    return false;
+  }
+  return !isDeadAcpRuntimeStatus(status);
+}
+
 export function shouldAbortWorkerStartup(
   status: Awaited<ReturnType<AcpWorkerClient["getSessionStatus"]>>,
 ): boolean {
@@ -2134,7 +2536,29 @@ export function describeWorkerStartupTimeout(
   return undefined;
 }
 
-function isMeaningfulAcpRuntimeEvent(event: AcpRuntimeEvent): boolean {
+function shouldAbortQueueOwnerUnavailableStartup(
+  status: Awaited<ReturnType<AcpWorkerClient["getSessionStatus"]>>,
+  elapsedMs: number,
+): boolean {
+  return isQueueOwnerUnavailableStatus(status) && elapsedMs >= QUEUE_OWNER_UNAVAILABLE_STARTUP_GRACE_MS;
+}
+
+function describeQueueOwnerUnavailableStartup(
+  status: Awaited<ReturnType<AcpWorkerClient["getSessionStatus"]>>,
+  elapsedMs: number,
+): string | undefined {
+  if (!isQueueOwnerUnavailableStatus(status) || elapsedMs < QUEUE_OWNER_UNAVAILABLE_STARTUP_GRACE_MS) {
+    return undefined;
+  }
+  const summary = typeof status?.details?.summary === "string" && status.details.summary.trim()
+    ? status.details.summary.trim()
+    : typeof status?.summary === "string" && status.summary.trim()
+      ? status.summary.trim()
+      : "queue owner unavailable";
+  return `ACP worker startup stalled: ${summary}`;
+}
+
+function isMeaningfulAcpRuntimeEvent(event: AcpWorkerEvent): boolean {
   if (event.type === "text_delta") {
     return typeof event.text === "string" && event.text.trim().length > 0;
   }
@@ -2186,7 +2610,10 @@ const ACTIVITY_NOTIFY_INTERVAL_MS = 30_000;
 const ACTIVITY_TEXT_MAX_LENGTH = 140;
 const WORKER_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEAD_SESSION_GRACE_MS = 2_000;
-const WORKER_STARTUP_GRACE_MS = 20_000;
+const WORKER_STARTUP_GRACE_MS = 3_000;
+const WORKER_STARTUP_WAIT_NOTIFY_DELAY_MS = 8_000;
+const WORKER_STARTUP_WAIT_NOTIFY_INTERVAL_MS = 20_000;
+const QUEUE_OWNER_UNAVAILABLE_STARTUP_GRACE_MS = 4_500;
 const RUN_TURN_SETTLE_GRACE_MS = 1_500;
 const MAX_WORKER_RESTART_ATTEMPTS = 10;
 

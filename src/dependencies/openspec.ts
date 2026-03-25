@@ -1,23 +1,21 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { prependPathEntries } from "../utils/env-path.ts";
+import {
+  describeCommandFailure,
+  isMissingCommandResult,
+  runShellCommand,
+  type ShellCommandResult,
+} from "../utils/shell-command.ts";
 
 export const OPENSPEC_PACKAGE_NAME = "@fission-ai/openspec";
-
-type CommandResult = {
-  code?: number | null;
-  stdout: string;
-  stderr: string;
-  error?: Error;
-};
 
 type CommandRunner = (params: {
   command: string;
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
-}) => Promise<CommandResult>;
+}) => Promise<ShellCommandResult>;
 
 export type EnsureOpenSpecCliOptions = {
   pluginRoot: string;
@@ -77,7 +75,7 @@ export async function ensureOpenSpecCli(
 
   const install = await runner({
     command: "npm",
-    args: ["install", "--omit=dev", "--no-save", OPENSPEC_PACKAGE_NAME],
+    args: ["install", "--omit=dev", "--no-save", "--package-lock=false", OPENSPEC_PACKAGE_NAME],
     cwd: options.pluginRoot,
     env,
   });
@@ -145,95 +143,6 @@ async function runCommand(params: {
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<CommandResult> {
-  const commandLabel = buildShellCommand(params.command, params.args);
-  return await new Promise((resolve) => {
-    const child = spawn(commandLabel, {
-      cwd: params.cwd,
-      env: params.env,
-      shell: true,
-      windowsHide: true,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-
-    child.on("error", (error) => {
-      resolve({
-        code: undefined,
-        stdout,
-        stderr,
-        error,
-      });
-    });
-
-    child.on("close", (code) => {
-      resolve({
-        code,
-        stdout,
-        stderr,
-      });
-    });
-  });
-}
-
-function isMissingCommandResult(result: CommandResult, command: string): boolean {
-  const combined = `${result.stdout}\n${result.stderr}\n${result.error?.message ?? ""}`.toLowerCase();
-  const normalizedCommand = command.toLowerCase();
-  return combined.includes("not recognized")
-    || combined.includes("not found")
-    || combined.includes(`'${normalizedCommand}' is not recognized`)
-    || combined.includes(`"${normalizedCommand}" is not recognized`);
-}
-
-function describeCommandFailure(result: CommandResult, label: string): string {
-  if (result.error) {
-    return result.error.message;
-  }
-  const stderr = result.stderr.trim();
-  const stdout = result.stdout.trim();
-  return stderr || stdout || `${label} exited with code ${result.code ?? "unknown"}`;
-}
-
-function buildShellCommand(command: string, args: string[]): string {
-  return [command, ...args].map((arg) => quoteShellArg(arg)).join(" ");
-}
-
-function quoteShellArg(arg: string): string {
-  if (process.platform === "win32") {
-    return quoteWindowsShellArg(arg);
-  }
-  return quotePosixShellArg(arg);
-}
-
-function quoteWindowsShellArg(arg: string): string {
-  if (arg.length === 0) {
-    return "\"\"";
-  }
-  const escaped = arg
-    .replace(/"/g, "\"\"")
-    .replace(/%/g, "%%");
-  if (!/[\s"&|<>^()!]/.test(arg)) {
-    return escaped;
-  }
-  return `"${escaped}"`;
-}
-
-function quotePosixShellArg(arg: string): string {
-  if (arg.length === 0) {
-    return "''";
-  }
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) {
-    return arg;
-  }
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}): Promise<ShellCommandResult> {
+  return await runShellCommand(params);
 }

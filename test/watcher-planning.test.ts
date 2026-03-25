@@ -406,7 +406,10 @@ test("watcher force-refreshes planning artifacts when journal is dirty and OpenS
   assert.equal(project?.status, "ready");
   assert.equal(project?.planningJournal?.dirty, false);
   assert.equal(await journalStore.hasUnsyncedChanges(changeName, repoStatePaths.planningJournalSnapshotFile), false);
-  assert.equal(notifierMessages.some((message) => message.includes("Planning ready. Next: run `cs-work`")), true);
+  assert.equal(
+    notifierMessages.some((message) => message.includes("Planning ready.") && message.includes("run `cs-work`")),
+    true,
+  );
 });
 
 test("watcher restarts planning worker after ACP runtime exit", async () => {
@@ -494,5 +497,8 @@ test("watcher restarts planning worker after ACP runtime exit", async () => {
   assert.equal(project?.status, "ready");
   assert.equal(runCount, 2);
   assert.equal(notifierMessages.some((message) => message.includes("Restarting ACP worker")), true);
-  assert.equal(notifierMessages.some((message) => message.includes("Planning ready. Next: run `cs-work`")), true);
+  assert.equal(
+    notifierMessages.some((message) => message.includes("Planning ready.") && message.includes("run `cs-work`")),
+    true,
+  );
 });

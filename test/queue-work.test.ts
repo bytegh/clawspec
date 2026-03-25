@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { buildWorkerSessionKey } from "../src/execution/session.ts";
+import { buildWorkerSessionKey, createWorkerSessionKey } from "../src/execution/session.ts";
 import { writeUtf8 } from "../src/utils/fs.ts";
 import { createServiceHarness, seedPlanningProject } from "./helpers/harness.ts";
 
@@ -52,7 +52,15 @@ test("work queues background implementation", async () => {
   assert.equal(project?.status, "armed");
   assert.equal(project?.execution?.action, "work");
   assert.equal(project?.currentTask, "1.1 Build the demo endpoint");
-  assert.equal(project?.execution?.sessionKey, buildWorkerSessionKey(project!, "primary", "codex"));
+  assert.equal(
+    project?.execution?.sessionKey,
+    createWorkerSessionKey(project!, {
+      workerSlot: "primary",
+      workerAgentId: "codex",
+      attemptKey: project?.execution?.armedAt,
+    }),
+  );
+  assert.match(project?.execution?.sessionKey ?? "", new RegExp(`^${buildWorkerSessionKey(project!, "primary", "codex")}:`));
   assert.notEqual(project?.execution?.sessionKey, project?.boundSessionKey);
   assert.deepEqual(watcherManager.wakeCalls, [channelKey]);
 });

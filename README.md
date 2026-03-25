@@ -19,6 +19,7 @@ The result is an OpenSpec workflow that stays chat-native without hiding long-ru
 - Discussion messages are recorded into a planning journal while context is attached.
 - `cs-plan` refreshes `proposal.md`, `design.md`, `specs`, and `tasks.md` without implementing code.
 - `cs-work` turns `tasks.md` into background execution, with watcher-driven progress and restart handling.
+- A running ACP worker can survive a gateway restart; ClawSpec will try to reattach to the live session before starting a replacement worker.
 - `/clawspec cancel` restores tracked files from snapshots instead of doing a blanket Git reset.
 - `/clawspec archive` validates and archives the finished OpenSpec change, then clears the active change from chat context.
 
@@ -41,6 +42,10 @@ In practice:
 
 ```mermaid
 flowchart TD
+    BOOT[clawspec.bootstrap service]
+    BOOT --> DEPS[ensure openspec + acpx]
+    BOOT --> STORES[state + memory + workspace stores]
+
     U[User In Chat] --> CMD[/clawspec command/]
     U --> KEY[cs-* keyword]
     U --> MSG[ordinary discussion]
@@ -61,16 +66,131 @@ flowchart TD
 
     SVC -->|cs-work| CTRL[execution-control.json]
     CTRL --> WATCHER[watcher manager]
-    WATCHER --> ACP[ACP worker via acpx]
-    ACP --> PROGRESS[worker-progress.jsonl]
-    ACP --> RESULT[execution-result.json]
+    WATCHER --> ACPCLIENT[AcpWorkerClient]
+    ACPCLIENT --> ACPCLI[direct acpx CLI session]
+    ACPCLI --> PROGRESS[worker-progress.jsonl]
+    ACPCLI --> RESULT[execution-result.json]
     WATCHER --> NOTIFY[chat progress notifier]
     NOTIFY --> U
 
     JOURNAL --> MAIN
-    ARTIFACTS --> ACP
+    ARTIFACTS --> ACPCLI
     RESULT --> STATE
+    PROGRESS --> STATE
 ```
+
+## Current System Architecture
+
+ClawSpec is split into six runtime layers.
+
+| Layer | Main pieces | Responsibility |
+| --- | --- | --- |
+| Bootstrap | `clawspec.bootstrap`, `ensureOpenSpecCli`, `ensureAcpxCli` | Initializes stores, verifies dependencies, and starts the watcher manager |
+| Control plane | `/clawspec` command, `clawspec-projects`, plugin hooks | Receives user intent, routes commands, and attaches the right chat context |
+| Planning plane | `message_received`, `before_prompt_build`, visible main agent turn | Records requirement discussion and runs `cs-plan` directly in the visible chat |
+| Execution plane | `WatcherManager`, `ExecutionWatcher`, `AcpWorkerClient` | Arms work, starts the background worker, and monitors progress/result files |
+| Recovery plane | startup recovery, restart backoff, session adoption | Re-attaches to live workers after gateway restart or re-arms failed work safely |
+| Persistence plane | OpenClaw state files + repo-local `.openclaw/clawspec` files | Stores project state, journals, progress, rollback baselines, and execution results |
+
+Important architectural choices:
+
+- Planning is visible. `cs-plan` runs in the main chat turn and does not use a hidden subagent.
+- Implementation is durable. `cs-work` is handed off to a watcher-managed background worker.
+- Worker transport is direct. ClawSpec talks to `acpx` through its own `AcpWorkerClient`, rather than depending on a hidden planning thread.
+- Progress is file-backed. The worker writes progress and result files so the watcher can recover after gateway restarts.
+- Repo safety is explicit. Cancel uses snapshot restore for tracked files instead of blanket repository reset.
+
+## Implementation Strategy
+
+### 1. Bootstrap and dependency discovery
+
+When the plugin service starts, it:
+
+- initializes the project, memory, and workspace stores
+- ensures `openspec` is available from plugin-local install or `PATH`
+- ensures `acpx` is available from plugin-local install, the OpenClaw builtin ACPX extension, or `PATH`
+- constructs `OpenSpecClient`, `AcpWorkerClient`, `ClawSpecNotifier`, `WatcherManager`, and `ClawSpecService`
+
+This means the plugin can bootstrap its own local toolchain on a fresh gateway host without requiring a manually prepared dev environment.
+
+### 2. Command routing and prompt injection
+
+ClawSpec uses three hook paths:
+
+- `message_received` records planning discussion into the journal when the project is attached
+- `before_prompt_build` injects project, planning, or execution context into the visible chat turn
+- `agent_end` reconciles the end of visible planning turns
+
+The `/clawspec` slash command is used for deterministic operations such as workspace selection, project selection, change creation, pause, continue, archive, and cancel.
+
+### 3. Visible planning flow
+
+Planning has two modes:
+
+- ordinary attached discussion, which only records requirements
+- `cs-plan`, which runs a deliberate planning sync in the visible chat
+
+During `cs-plan`, ClawSpec injects:
+
+- the active repo and change
+- the planning journal
+- imported OpenSpec skill text from `skills/`
+- strict rules that prevent code implementation or silent change switching
+
+The main chat agent then refreshes `proposal.md`, `specs`, `design.md`, and `tasks.md` in the current visible turn.
+
+### 4. Background implementation flow
+
+`cs-work` does not implement inside the visible chat turn. Instead it:
+
+- verifies that planning is clean enough to execute
+- writes `execution-control.json`
+- arms the watcher for the active channel/project
+- lets the watcher start a direct `acpx` session for the worker
+
+The worker reads:
+
+- repo-local control files
+- planning artifacts
+- `openspec instructions apply --json`
+
+It then works task by task, updates `tasks.md`, writes `execution-result.json`, and appends compact structured events to `worker-progress.jsonl`.
+
+### 5. Progress reporting and replay
+
+The watcher is responsible for user-facing progress updates:
+
+- it tails `worker-progress.jsonl`
+- translates worker events into short chat updates
+- keeps project task counts and heartbeat state in sync
+- replays missed progress from the last saved offset before sending the final completion message
+- reports startup milestones separately from task milestones, so "worker connected" and "loading context" can appear before the first task starts
+
+You should now expect early implementation updates in two layers:
+
+- watcher-level status such as "starting worker" and "ACP worker connected"
+- worker-written status such as "Preparing <task>: loading context", "Loaded proposal.md", and "Context ready..."
+
+That replay step is important because it prevents the user from missing late task updates if the gateway or watcher was temporarily behind.
+
+### 6. Recovery, restart, and bounded retries
+
+On gateway restart, the watcher manager:
+
+- scans active projects
+- adopts a still-running worker session if it is alive
+- otherwise re-arms the project for planning or implementation
+- preserves task progress and the worker progress offset
+
+Automatic restart recovery is intentionally limited to projects that were actively armed, running, planning, or blocked by a recoverable ACP/runtime failure. A `ready` or `idle` project that is simply waiting for `cs-plan` or `cs-work` is not auto-started.
+
+On worker failure, ClawSpec:
+
+- distinguishes recoverable ACP failures from real blockers
+- retries recoverable failures with bounded backoff
+- stops retrying after the configured cap and marks the project as `blocked`
+
+This keeps `cs-work` resilient without leaving silent zombie work behind.
 
 ## What Runs Where
 
@@ -150,10 +270,77 @@ Example `~/.openclaw/openclaw.json`:
 
 Important notes:
 
-- Recent OpenClaw builds often bundle `acpx` under the host install. In that case you usually only need to enable it.
+- Recent OpenClaw builds often bundle `acpx` under the host install. ClawSpec checks that builtin copy before falling back to `acpx` on `PATH` or a plugin-local install.
 - If your OpenClaw build does not bundle `acpx`, install or load it separately before relying on `cs-work`.
 - ClawSpec itself does not ship its own ACP runtime backend.
 - When ACPX is unavailable, the watcher now reports a short recovery hint in chat telling the user to enable `plugins.entries.acpx` and backend `acpx`.
+- `acp.defaultAgent` is the OpenClaw ACP default. ClawSpec background workers use `plugins.entries.clawspec.config.workerAgentId` by default.
+- For ClawSpec worker selection, precedence is: `/clawspec worker <agent-id>` for the current channel/project, then `clawspec.config.workerAgentId`, then the built-in ClawSpec fallback.
+- In other words, ClawSpec does not currently inherit `acp.defaultAgent` automatically. If you want both to use the same agent, set both values explicitly.
+
+### 2.5. Choose the default worker agent
+
+ClawSpec can run background work with different ACP agents such as `codex` or `claude`, but there are two separate defaults to understand:
+
+- `acp.defaultAgent`: the OpenClaw ACP default used by the host ACP system
+- `plugins.entries.clawspec.config.workerAgentId`: the ClawSpec default used by `cs-work`
+
+Recommended if you want both layers aligned:
+
+```json
+{
+  "acp": {
+    "enabled": true,
+    "backend": "acpx",
+    "defaultAgent": "claude"
+  },
+  "plugins": {
+    "entries": {
+      "clawspec": {
+        "enabled": true,
+        "config": {
+          "workerAgentId": "claude"
+        }
+      }
+    }
+  }
+}
+```
+
+Useful runtime commands:
+
+- `/clawspec worker` shows the current worker agent for this channel/project and the configured default
+- `/clawspec worker codex` switches the current channel/project to `codex`
+- `/clawspec worker claude` switches the current channel/project to `claude`
+- `/clawspec worker status` shows the live worker state, runtime transport state, startup phase, startup wait, and current session info
+
+Notes:
+
+- `/clawspec worker <agent-id>` is persisted at the current channel/project scope
+- the chosen agent must exist in your OpenClaw agent list or ACP allowlist
+- if you want a global default, set `workerAgentId` in OpenClaw config
+- if you want a one-off override for the active project conversation, use `/clawspec worker <agent-id>`
+
+### 2.6. ClawSpec plugin config reference
+
+Common `plugins.entries.clawspec.config` fields:
+
+| Key | Purpose | Notes |
+| --- | --- | --- |
+| `defaultWorkspace` | Default base directory used by `/clawspec workspace` and `/clawspec use` | Channel-specific workspace selection overrides this after first use |
+| `workerAgentId` | Default ACP agent used by background workers | Can be overridden per channel/project with `/clawspec worker <agent-id>` |
+| `workerBackendId` | Optional ACP backend override for worker sessions | Normally leave unset when using the standard `acpx` backend |
+| `openSpecTimeoutMs` | Timeout for each OpenSpec CLI invocation | Increase this if your repo or host is slow |
+| `watcherPollIntervalMs` | Background watcher recovery poll interval | Controls how quickly recovery scans and replay checks run |
+| `archiveDirName` | Directory name under `.openclaw/clawspec/` for archived bundles | Keep the default unless you need a different archive layout |
+| `allowedChannels` | Optional allowlist of channel ids allowed to use ClawSpec | Useful when only selected channels should expose the workflow |
+
+Backward-compatibility keys still accepted but currently treated as no-ops:
+
+- `maxAutoContinueTurns`
+- `maxNoProgressTurns`
+- `workerWaitTimeoutMs`
+- `subagentLane`
 
 ### 3. Restart the gateway
 
@@ -162,7 +349,7 @@ openclaw gateway restart
 openclaw gateway status
 ```
 
-### 4. Understand OpenSpec bootstrap behavior
+### 4. Understand tool bootstrap behavior
 
 On startup ClawSpec checks for `openspec` in this order:
 
@@ -175,6 +362,19 @@ npm install --omit=dev --no-save @fission-ai/openspec
 ```
 
 That means the gateway host may need network access and a working `npm` if `openspec` is not already available.
+
+On startup ClawSpec checks for `acpx` in this order:
+
+1. Plugin-local binary under `node_modules/.bin`
+2. The ACPX binary bundled with the current OpenClaw install
+3. `acpx` on `PATH`
+4. If none of those satisfy the worker runtime requirement, it may run:
+
+```powershell
+npm install --omit=dev --no-save acpx@0.3.1
+```
+
+That fallback install can take a while on the first run. If OpenClaw already bundles ACPX, ClawSpec should now reuse it instead of reinstalling another copy.
 
 ## Quick Start
 
@@ -200,29 +400,135 @@ What happens:
 7. Watcher progress updates appear back in the same chat.
 8. `/clawspec archive` validates and archives the completed change.
 
+## Recommended First Run
+
+This is the normal happy-path flow for a first-time user.
+
+### 1. Bind a workspace and select a project
+
+```text
+/clawspec workspace "D:\clawspec\workspace"
+/clawspec use "demo-app"
+```
+
+Expected result:
+
+- ClawSpec remembers the workspace for the current chat channel.
+- The project directory is created if it does not exist.
+- `openspec init` runs automatically the first time a repo is selected.
+
+### 2. Create a change before discussing requirements
+
+```text
+/clawspec proposal add-login-flow "Build login and session handling"
+```
+
+Expected result:
+
+- OpenSpec creates `openspec/changes/add-login-flow/`
+- ClawSpec takes a rollback snapshot baseline
+- The chat enters the active change context for `add-login-flow`
+
+### 3. Describe the requirement in normal chat
+
+Example:
+
+```text
+Use email + password login.
+Add refresh token support.
+Expire access tokens after 15 minutes.
+```
+
+Expected result:
+
+- Your discussion is appended to the planning journal while the chat is attached.
+- ClawSpec does not rewrite artifacts yet.
+- ClawSpec does not start coding yet.
+
+### 4. Run visible planning sync
+
+```text
+cs-plan
+```
+
+Expected result:
+
+- The current visible chat turn refreshes `proposal.md`, `design.md`, `specs`, and `tasks.md`
+- You should see planning progress in the main chat
+- The final message should clearly tell you to run `cs-work`
+
+### 5. Start background implementation
+
+```text
+cs-work
+```
+
+Expected result:
+
+- ClawSpec arms the watcher
+- The watcher starts the ACP worker through `acpx`
+- Short progress updates begin to appear in chat as tasks start and finish
+
+### 6. Check progress or temporarily leave project mode
+
+Useful commands:
+
+```text
+/clawspec worker status
+/clawspec status
+cs-detach
+cs-attach
+```
+
+Use `cs-detach` when you want to keep the worker running but stop normal chat from being recorded into the planning journal. Use `cs-attach` when you want to continue discussing this change.
+
+### 7. Finish the change
+
+If implementation completes cleanly:
+
+```text
+/clawspec archive
+```
+
+If you want to add more requirements before archive:
+
+```text
+Describe the new requirement in chat
+cs-plan
+cs-work
+```
+
+That loop is the normal operating model:
+
+1. discuss
+2. `cs-plan`
+3. `cs-work`
+4. archive when done
+
 ## Slash Commands
 
-| Command | Purpose |
-| --- | --- |
-| `/clawspec workspace [path]` | Show the current workspace or switch the workspace for this chat channel |
-| `/clawspec use <project-name>` | Select or create a project inside the current workspace |
-| `/clawspec proposal <change-name> [description]` | Create a new OpenSpec change scaffold and rollback baseline |
-| `/clawspec worker [agent-id]` | Show or set the ACP worker agent for this channel/project |
-| `/clawspec worker status` | Show live worker state, current task, session, and heartbeat |
-| `/clawspec attach` | Reattach ordinary chat to the active ClawSpec context |
-| `/clawspec detach` | Detach ordinary chat from ClawSpec context |
-| `/clawspec deattach` | Legacy alias for `/clawspec detach` |
-| `/clawspec continue` | Resume planning or implementation depending on the current phase |
-| `/clawspec pause` | Request a cooperative pause at the next safe boundary |
-| `/clawspec status` | Reconcile and render current project status |
-| `/clawspec archive` | Validate and archive a completed change |
-| `/clawspec cancel` | Restore tracked files, remove the change, and clear runtime state |
+| Command | When to use | What it does |
+| --- | --- | --- |
+| `/clawspec workspace [path]` | Before selecting a project, or when switching to another base workspace | Shows the current workspace for this chat channel, or updates it when a path is provided |
+| `/clawspec use <project-name>` | When starting or resuming work in a repo | Selects or creates the project directory under the current workspace and runs `openspec init` if needed |
+| `/clawspec proposal <change-name> [description]` | Before structured planning starts | Creates the OpenSpec change scaffold, prepares rollback state, and makes that change active |
+| `/clawspec worker` | When you want to inspect the current worker agent selection | Shows the current per-channel/project worker agent and the plugin default |
+| `/clawspec worker <agent-id>` | When you want this project conversation to use another ACP worker, such as `codex` or `claude` | Overrides the worker agent for the current channel/project context |
+| `/clawspec worker status` | During background work or recovery debugging | Shows configured worker agent, runtime transport state, startup phase, startup wait, live session state, pid, heartbeat, and next action |
+| `/clawspec attach` | When ordinary chat should go back to recording requirements for the active change | Reattaches the current conversation to ClawSpec context so planning notes are journaled again |
+| `/clawspec detach` | When background work should continue but ordinary chat should stop affecting the project | Detaches ordinary chat from ClawSpec prompt injection and planning journal capture |
+| `/clawspec deattach` | Only for backward compatibility with older habits | Legacy alias for `/clawspec detach` |
+| `/clawspec continue` | After a pause, blocker resolution, or restart recovery | Resumes planning or implementation based on the current project phase |
+| `/clawspec pause` | When you want the worker to stop at a safe boundary | Requests a cooperative pause for the current execution |
+| `/clawspec status` | Any time you want a reconciled project snapshot | Renders current workspace, project, change, lifecycle, task counts, journal status, and next step |
+| `/clawspec archive` | After all tasks are complete and you want to close the change | Validates and archives the finished OpenSpec change, then clears active change state |
+| `/clawspec cancel` | When you want to abandon the active change | Restores tracked files from snapshots, removes the change, stops execution state, and clears the active change |
 
 Auxiliary host CLI:
 
-| Command | Purpose |
-| --- | --- |
-| `clawspec-projects` | List remembered ClawSpec workspaces |
+| Command | When to use | What it does |
+| --- | --- | --- |
+| `clawspec-projects` | On the gateway host when you want to inspect saved workspace roots | Lists remembered ClawSpec workspaces from plugin state |
 
 ## Chat Keywords
 
@@ -230,15 +536,15 @@ Send these as normal chat messages in the active conversation.
 
 | Keyword | Purpose |
 | --- | --- |
-| `cs-plan` | Run visible planning sync in the current chat turn |
-| `cs-work` | Start background implementation for pending tasks |
-| `cs-attach` | Reattach ordinary chat to project mode |
-| `cs-detach` | Detach ordinary chat from project mode |
-| `cs-deattach` | Legacy alias for `cs-detach` |
-| `cs-pause` | Pause background execution cooperatively |
-| `cs-continue` | Resume planning or implementation |
-| `cs-status` | Show current project status |
-| `cs-cancel` | Cancel the active change |
+| `cs-plan` | Runs visible planning sync in the current chat turn. Use this after you discuss or change requirements. |
+| `cs-work` | Starts background implementation for pending tasks. Use this only after planning is clean. |
+| `cs-attach` | Reattaches ordinary chat to project mode so requirement discussion is journaled again. |
+| `cs-detach` | Detaches ordinary chat from project mode while letting watcher updates continue. |
+| `cs-deattach` | Legacy alias for `cs-detach`. |
+| `cs-pause` | Requests a cooperative pause for the background worker. |
+| `cs-continue` | Resumes planning or implementation, depending on the current blocked or paused state. |
+| `cs-status` | Shows current project status in chat. |
+| `cs-cancel` | Cancels the active change from chat without using the slash command. |
 
 ## End-To-End Workflow
 
@@ -351,6 +657,7 @@ The watcher then:
 - posts a short `"ACP worker connected"` message
 - streams progress from `worker-progress.jsonl`
 - reconciles `execution-result.json`
+- replays missed progress before the final completion message if the watcher had fallen behind
 - updates project state
 - restarts recoverable ACP failures with bounded backoff
 - surfaces ACPX availability problems in a short actionable format
@@ -359,7 +666,9 @@ The watcher then:
 
 ClawSpec is designed so background work is recoverable:
 
-- gateway start: watcher manager scans active projects and re-arms recoverable work
+- gateway start: watcher manager scans active projects and first tries to adopt any still-running ACP worker session
+- adopted live session: if the worker is still alive, ClawSpec keeps the existing ACP session, resumes watching its progress files, and does not require you to rerun `cs-work`
+- dead session on restart: if the old worker is gone, ClawSpec re-arms recoverable work and starts a replacement worker when needed
 - gateway stop: active background sessions are closed and resumable state is preserved
 - ACP worker crash: watcher retries recoverable failures with backoff
 - max restart cap: after 10 ACP restart attempts, the project becomes `blocked`
@@ -461,6 +770,18 @@ What to do:
 1. keep discussing requirements if needed
 2. run `cs-plan`
 3. run `cs-work` again
+
+### Worker looks connected but has not started the task yet
+
+This usually means the ACP worker is already alive and is still digesting the implementation prompt or reading planning artifacts.
+
+What to check:
+
+1. watcher messages such as "ACP worker connected..."
+2. worker-written status messages such as "Preparing <task>: loading context"
+3. `/clawspec worker status`, especially `startup phase` and `startup wait`
+
+If you already see "Context ready for ..." then the worker has finished loading planning artifacts and is about to move into implementation. That phase can still take a little time before the first `task_start`.
 
 ### Watcher says ACPX is unavailable
 

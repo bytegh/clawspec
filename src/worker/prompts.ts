@@ -302,12 +302,11 @@ export function buildAcpPlanningTurnPrompt(params: {
   return [
     "You are the ClawSpec background planning worker.",
     "Do not post chat messages. Communicate only through files.",
-    importedSkillBlock(params.importedSkills),
-    "",
     `Repository: ${params.project.repoPath ?? "_unknown_"}`,
     `Change: ${params.project.changeName ?? "_unknown_"}`,
     `Artifact: ${params.instructions.artifactId}`,
     `Output path: ${outputPath}`,
+    importedSkillBlock(params.importedSkills),
     "",
     "Required behavior:",
     "- Only work on the active change shown above.",
@@ -366,17 +365,19 @@ export function buildAcpImplementationTurnPrompt(params: {
   const tasksPath = params.project.repoPath && params.project.changeName
     ? path.join(params.project.repoPath, "openspec", "changes", params.project.changeName, "tasks.md")
     : "unknown";
+  const contextLabels = contextPaths.map((contextPath) => displayPath(contextPath));
+  const firstContextLabel = contextLabels[0] ?? displayPath(tasksPath);
+  const afterContextLabel = contextLabels[1] ?? `start task ${params.task.id}`;
 
   const taskList = params.tasks.map((task) => `- ${task.id} ${task.description}`).join("\n");
 
   return [
     "You are the ClawSpec background implementation worker.",
     "Do not post chat messages. Communicate only through files.",
-    importedSkillBlock(params.importedSkills),
-    "",
     `Repository: ${params.project.repoPath ?? "_unknown_"}`,
     `Change: ${params.project.changeName ?? "_unknown_"}`,
     `Mode: ${params.mode}`,
+    importedSkillBlock(params.importedSkills),
     "",
     "Tasks to implement (in order):",
     taskList,
@@ -390,6 +391,10 @@ export function buildAcpImplementationTurnPrompt(params: {
     `- Append short progress events to ${params.repoStatePaths.workerProgressFile} as valid JSON Lines.`,
     "- Progress events must be human-readable, one line each, and must match the actual work completed.",
     `- Every progress event must include \`current\` (current task number) and \`total\` (total task count for this run).`,
+    `- Do not stay silent until \`task_start\`. Emit context-loading progress first.`,
+    `- Before reading the context bundle, append one \`status\` event like: \`Preparing ${params.task.id}: loading context. Next: read ${firstContextLabel}.\``,
+    "- After reading each context file, append one `status` event naming the file you just loaded and what comes next.",
+    `- After the last context file is loaded, append one \`status\` event like: \`Context ready for ${params.task.id}. Next: start implementation. This can take a little time, so please wait.\``,
     `- Before each task starts, append a \`task_start\` event with a message like: \`Start ${params.task.id}: <short description>. Next: <next step>.\``,
     `- Right after each task is complete, append a \`task_done\` event with a message like: \`Done ${params.task.id}: <short summary>. Changed <n> files: <preview or none>. Next: <next step or done>.\``,
     "- If you hit a blocker, append one `blocked` event before writing the final execution result.",
@@ -406,11 +411,22 @@ export function buildAcpImplementationTurnPrompt(params: {
     fence(JSON.stringify({
       version: 1,
       timestamp: "ISO-8601 timestamp",
+      kind: "status",
+      current: 1,
+      total: params.tasks.length,
+      taskId: params.task.id,
+      message: `Preparing ${params.task.id}: loading context. Next: read ${firstContextLabel}.`,
+    }, null, 2), "json"),
+    "",
+    "Worker progress JSONL task-start example:",
+    fence(JSON.stringify({
+      version: 1,
+      timestamp: "ISO-8601 timestamp",
       kind: "task_start",
       current: 1,
       total: params.tasks.length,
       taskId: params.task.id,
-      message: `Start ${params.task.id}: ${params.task.description}. Next: ${params.tasks[1]?.id ?? "finish this task"}.`,
+      message: `Start ${params.task.id}: ${params.task.description}. Next: ${params.tasks[1]?.id ?? afterContextLabel}.`,
     }, null, 2), "json"),
     "",
     "Execution result JSON template:",

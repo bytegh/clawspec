@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const ATOMIC_WRITE_RETRYABLE_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const ATOMIC_WRITE_RETRYABLE_CODES = new Set(["EPERM", "EACCES", "EBUSY", "ENOENT"]);
 const ATOMIC_WRITE_RETRY_DELAYS_MS = [20, 60, 120, 250];
 
 export async function ensureDir(dirPath: string): Promise<void> {
@@ -51,6 +51,7 @@ export async function writeUtf8(filePath: string, content: string): Promise<void
       throw error;
     }
 
+    await ensureDir(path.dirname(filePath));
     await writeFile(filePath, content, "utf8");
     await cleanupTempFile(tempPath);
   }

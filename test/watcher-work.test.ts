@@ -530,7 +530,7 @@ test("watcher restarts implementation worker after ACP runtime exit", async (t) 
   assert.equal(project?.status, "done");
   assert.equal(project?.lastExecution?.status, "done");
   assert.equal(runCount, 1);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-restart", "Worker restarted", "retry 1.1"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-restart", "Restarting ACP worker", "retry task 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-restart", "All tasks complete", "/clawspec archive"), true);
   assert.equal(notifierMessages.some((message) => message.includes("Blocked:")), false);
   const progress = await readUtf8(repoStatePaths.progressFile);
@@ -697,7 +697,7 @@ test("watcher restarts a dead ACP session after progress stalls", async (t) => {
   assert.equal(project?.status, "done");
   assert.equal(project?.lastExecution?.status, "done");
   assert.equal(runCount, 2);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-session", "Worker restarted", "retry 1.1"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-session", "Restarting ACP worker", "retry task 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-session", "All tasks complete", "/clawspec archive"), true);
 });
 
@@ -844,7 +844,7 @@ test("watcher restarts a dead ACP session that dies before first progress", asyn
   assert.equal(project?.status, "done");
   assert.equal(project?.lastExecution?.status, "done");
   assert.equal(runCount, 2);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-startup", "Worker restarted", "retry 1.1"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-startup", "Restarting ACP worker", "retry task 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-dead-startup", "All tasks complete", "/clawspec archive"), true);
 });
 
@@ -1003,7 +1003,7 @@ test("status-only ACP heartbeats do not keep a dead session alive", async (t) =>
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
   assert.equal(runCount, 2);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-status-heartbeats", "Worker restarted", "retry 1.1"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-status-heartbeats", "Restarting ACP worker", "retry task 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-status-heartbeats", "All tasks complete"), true);
 });
 
@@ -1174,7 +1174,7 @@ test("dead ACP session that ignores abort is restarted without hanging the watch
   assert.equal(project?.status, "done");
   assert.equal(project?.lastExecution?.status, "done");
   assert.equal(runCount, 2);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-hung-dead-session", "Worker restarted", "retry 1.1"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-hung-dead-session", "Restarting ACP worker", "retry task 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-hung-dead-session", "All tasks complete"), true);
 });
 
@@ -1589,7 +1589,7 @@ test("watcher retries when ACP runtime backend is temporarily unavailable", asyn
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
   assert.equal(runCount, 2);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "Worker restarted"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "Restarting ACP worker"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "ACPX is unavailable"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "plugins.entries.acpx"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "All tasks complete"), true);

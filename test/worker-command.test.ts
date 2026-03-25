@@ -44,9 +44,11 @@ test("worker status shows live state", async () => {
           ...current.execution,
           workerAgentId: "codex",
           workerSlot: "primary",
+          startupPhase: "connected",
           currentTaskId: "1.2",
           currentArtifact: undefined,
           sessionKey: "watcher:demo",
+          connectedAt: new Date(Date.now() - 6_000).toISOString(),
           lastHeartbeatAt: "2026-03-22T10:00:00.000Z",
         }
       : current.execution,
@@ -56,6 +58,8 @@ test("worker status shows live state", async () => {
   assert.match(result.text ?? "", /Worker Status/);
   assert.match(result.text ?? "", /Change: `watch-status`/);
   assert.match(result.text ?? "", /Execution state: `running`/);
+  assert.match(result.text ?? "", /Startup phase: `connected`/);
+  assert.match(result.text ?? "", /Startup wait: `\d+s`/);
   assert.match(result.text ?? "", /Current task: `1.2`/);
   assert.match(result.text ?? "", /Progress: 1\/4 complete, 3 remaining/);
   assert.match(result.text ?? "", /Next: Wait for worker updates or use `\/clawspec pause`\./);

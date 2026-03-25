@@ -13,23 +13,37 @@ import { WorkspaceStore } from "../../src/workspace/store.ts";
 export type FakeWatcherManager = {
   wakeCalls: string[];
   interruptCalls: Array<{ channelKey: string; reason: string }>;
+  runtimeStatusCalls: string[];
+  runtimeStatus?: unknown;
   wake: (channelKey: string) => Promise<void>;
   interrupt: (channelKey: string, reason: string) => Promise<void>;
+  getWorkerRuntimeStatus: (channelKeyOrProject: string | { channelKey: string }) => Promise<unknown>;
 };
 
 export function createFakeWatcherManager(): FakeWatcherManager {
   const wakeCalls: string[] = [];
   const interruptCalls: Array<{ channelKey: string; reason: string }> = [];
-  return {
+  const runtimeStatusCalls: string[] = [];
+  const manager: FakeWatcherManager = {
     wakeCalls,
     interruptCalls,
+    runtimeStatusCalls,
+    runtimeStatus: undefined,
     wake: async (channelKey: string) => {
       wakeCalls.push(channelKey);
     },
     interrupt: async (channelKey: string, reason: string) => {
       interruptCalls.push({ channelKey, reason });
     },
+    getWorkerRuntimeStatus: async (channelKeyOrProject: string | { channelKey: string }) => {
+      const channelKey = typeof channelKeyOrProject === "string"
+        ? channelKeyOrProject
+        : channelKeyOrProject.channelKey;
+      runtimeStatusCalls.push(channelKey);
+      return manager.runtimeStatus;
+    },
   };
+  return manager;
 }
 
 export function createLogger() {

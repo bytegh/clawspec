@@ -95,6 +95,7 @@ import {
 } from "../worker/prompts.ts";
 import { loadClawSpecSkillBundle } from "../worker/skills.ts";
 import type { WatcherManager } from "../watchers/manager.ts";
+import type { AcpWorkerStatus } from "../acp/client.ts";
 
 type PromptBuildEvent = {
   prompt: string;
@@ -1327,7 +1328,7 @@ export class ClawSpecService {
     const currentAgent = project.workerAgentId ?? this.defaultWorkerAgentId;
 
     if (requestedAgent.toLowerCase() === "status") {
-      return okReply(this.buildWorkerStatusText(project, availableAgents));
+      return okReply(await this.buildWorkerStatusText(project, availableAgents));
     }
 
     if (!requestedAgent) {
@@ -1924,10 +1925,19 @@ export class ClawSpecService {
     return Array.from(new Set([...allowed, ...listed])).sort((left, right) => left.localeCompare(right));
   }
 
-  private buildWorkerStatusText(project: ProjectState, availableAgents: string[]): string {
+  private async buildWorkerStatusText(project: ProjectState, availableAgents: string[]): Promise<string> {
     const configuredAgent = project.workerAgentId ?? this.defaultWorkerAgentId;
     const execution = project.execution;
     const taskCounts = project.taskCounts;
+    const runtimeStatus = this.watcherManager?.getWorkerRuntimeStatus
+      ? await this.watcherManager.getWorkerRuntimeStatus(project)
+      : undefined;
+    const transportMode = describeWorkerTransportMode(project);
+    const runtimeState = describeWorkerRuntimeState(project, runtimeStatus);
+    const startupWait = describeExecutionStartupWait(execution);
+    const runtimePid = typeof runtimeStatus?.details?.pid === "number" && Number.isFinite(runtimeStatus.details.pid)
+      ? runtimeStatus.details.pid
+      : undefined;
     const nextAction = execution?.action === "plan"
       ? "Planning is active. Let the current chat turn finish."
       : execution?.action === "work"
@@ -1955,15 +1965,24 @@ export class ClawSpecService {
       `Default worker agent: \`${this.defaultWorkerAgentId}\``,
       availableAgents.length > 0 ? `Available agents: ${availableAgents.map((agentId) => `\`${agentId}\``).join(", ")}` : "",
       `Execution state: \`${execution?.state ?? "idle"}\``,
+      `Worker transport: \`${transportMode}\``,
       `Action: \`${execution?.action ?? "none"}\``,
       `Worker slot: \`${execution?.workerSlot ?? "primary"}\``,
       execution?.workerAgentId ? `Running agent: \`${execution.workerAgentId}\`` : "",
+      execution?.startupPhase ? `Startup phase: \`${execution.startupPhase}\`` : "",
+      execution?.connectedAt ? `Connected at: \`${execution.connectedAt}\`` : "",
+      execution?.firstProgressAt ? `First visible progress: \`${execution.firstProgressAt}\`` : "",
+      startupWait ? `Startup wait: \`${startupWait}\`` : "",
       execution?.currentArtifact ? `Current artifact: \`${execution.currentArtifact}\`` : "",
       execution?.currentTaskId ? `Current task: \`${execution.currentTaskId}\`` : "",
       taskCounts ? `Progress: ${taskCounts.complete}/${taskCounts.total} complete, ${taskCounts.remaining} remaining` : "",
       execution?.sessionKey ? `Session: \`${execution.sessionKey}\`` : "",
+      `Runtime status: \`${runtimeState}\``,
+      runtimePid != null ? `Runtime pid: \`${runtimePid}\`` : "",
+      runtimeStatus?.summary ? `Runtime summary: ${runtimeStatus.summary}` : "",
       execution?.lastHeartbeatAt ? `Last heartbeat: \`${execution.lastHeartbeatAt}\`` : "",
       execution?.restartCount ? `Restart attempts: \`${execution.restartCount}\`` : "",
+      execution?.progressOffset != null ? `Progress offset: \`${execution.progressOffset}\`` : "",
       execution?.lastFailure ? `Last worker failure: ${execution.lastFailure}` : "",
       project.latestSummary ? `Latest summary: ${project.latestSummary}` : "",
       `Next: ${nextAction}`,
@@ -2698,6 +2717,82 @@ export class ClawSpecService {
 
     return lines.filter((line, index, array) => !(line === "" && array[index - 1] === "")).join("\n");
   }
+}
+
+function describeWorkerTransportMode(project: ProjectState): string {
+  const execution = project.execution;
+  if (!execution) {
+    return "idle";
+  }
+  if (execution.state === "armed" && (execution.restartCount ?? 0) > 0) {
+    return "restart-pending";
+  }
+  if (execution.state === "armed") {
+    return "queued";
+  }
+  if (
+    execution.state === "running"
+    && typeof project.latestSummary === "string"
+    && /monitoring the running .*worker/i.test(project.latestSummary)
+  ) {
+    return "adopted-monitoring";
+  }
+  if (execution.state === "running") {
+    return "monitoring";
+  }
+  return execution.state;
+}
+
+function describeWorkerRuntimeState(project: ProjectState, runtimeStatus?: AcpWorkerStatus): string {
+  if (!project.execution?.sessionKey) {
+    return "no-session";
+  }
+  if (!runtimeStatus) {
+    return "unknown";
+  }
+
+  const detailState = typeof runtimeStatus.details?.status === "string"
+    ? runtimeStatus.details.status.trim().toLowerCase()
+    : "";
+  const summary = runtimeStatus.summary.trim().toLowerCase();
+
+  if (detailState === "alive" || detailState === "running") {
+    return "alive";
+  }
+  if (detailState === "dead" && summary.includes("no-session")) {
+    return "no-session";
+  }
+  if (detailState === "dead") {
+    return "dead";
+  }
+  if (summary.includes("status=alive") || summary.includes("status=running")) {
+    return "alive";
+  }
+  if (summary.includes("no-session")) {
+    return "no-session";
+  }
+  if (summary.includes("status=dead")) {
+    return "dead";
+  }
+  return "unknown";
+}
+
+function describeExecutionStartupWait(execution: ProjectState["execution"]): string | undefined {
+  if (!execution?.connectedAt || execution.firstProgressAt) {
+    return undefined;
+  }
+  const connectedAt = Date.parse(execution.connectedAt);
+  if (Number.isNaN(connectedAt)) {
+    return undefined;
+  }
+  const elapsedMs = Math.max(0, Date.now() - connectedAt);
+  const seconds = Math.max(1, Math.round(elapsedMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
 }
 
 function extractLatestMessageTextByRole(

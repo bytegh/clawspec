@@ -17,6 +17,7 @@ import { AcpWorkerClient } from "./acp/client.ts";
 import { ClawSpecNotifier } from "./watchers/notifier.ts";
 import { WatcherManager } from "./watchers/manager.ts";
 import { ensureOpenSpecCli } from "./dependencies/openspec.ts";
+import { ensureAcpxCli } from "./dependencies/acpx.ts";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_BIN_DIR = path.join(PLUGIN_ROOT, "node_modules", ".bin");
@@ -43,38 +44,12 @@ const plugin = {
       timeoutMs: config.openSpecTimeoutMs,
       extraPathEntries: [LOCAL_BIN_DIR],
     });
-    const acpClient = new AcpWorkerClient({
-      agentId: config.workerAgentId,
-      backendId: config.workerBackendId,
-      logger: api.logger,
-    });
     const notifier = new ClawSpecNotifier({
       api,
       logger: api.logger,
     });
-    const watcherManager = new WatcherManager({
-      stateStore,
-      openSpec,
-      archiveDirName: config.archiveDirName,
-      logger: api.logger,
-      notifier,
-      acpClient,
-      pollIntervalMs: config.watcherPollIntervalMs,
-    });
-    const service = new ClawSpecService({
-      api,
-      config: api.config,
-      logger: api.logger,
-      stateStore,
-      memoryStore,
-      openSpec,
-      archiveDirName: config.archiveDirName,
-      allowedChannels: config.allowedChannels,
-      defaultWorkspace: config.defaultWorkspace,
-      defaultWorkerAgentId: config.workerAgentId,
-      workspaceStore,
-      watcherManager,
-    });
+    let watcherManager: WatcherManager | undefined;
+    let service: ClawSpecService | undefined;
 
     const initStores = () => Promise.all([
       stateStore.initialize(),
@@ -83,25 +58,52 @@ const plugin = {
     ]);
 
     api.registerService({
-      id: "clawspec.dependencies",
-      async start(ctx) {
-        await ensureOpenSpecCli({
-          pluginRoot: PLUGIN_ROOT,
-          logger: ctx.logger,
-        });
-      },
-    });
-
-    api.registerService({
       id: "clawspec.bootstrap",
       async start() {
         await ensureDir(pluginStateRoot);
         await ensureDir(config.defaultWorkspace);
         await initStores();
+        await ensureOpenSpecCli({
+          pluginRoot: PLUGIN_ROOT,
+          logger: api.logger,
+        });
+        const acpx = await ensureAcpxCli({
+          pluginRoot: PLUGIN_ROOT,
+          logger: api.logger,
+        });
+        const acpClient = new AcpWorkerClient({
+          agentId: config.workerAgentId,
+          logger: api.logger,
+          command: acpx.command,
+          env: acpx.env,
+        });
+        watcherManager = new WatcherManager({
+          stateStore,
+          openSpec,
+          archiveDirName: config.archiveDirName,
+          logger: api.logger,
+          notifier,
+          acpClient,
+          pollIntervalMs: config.watcherPollIntervalMs,
+        });
+        service = new ClawSpecService({
+          api,
+          config: api.config,
+          logger: api.logger,
+          stateStore,
+          memoryStore,
+          openSpec,
+          archiveDirName: config.archiveDirName,
+          allowedChannels: config.allowedChannels,
+          defaultWorkspace: config.defaultWorkspace,
+          defaultWorkerAgentId: config.workerAgentId,
+          workspaceStore,
+          watcherManager,
+        });
         await watcherManager.start();
       },
       async stop() {
-        await watcherManager.stop();
+        await watcherManager?.stop();
       },
     });
 
@@ -132,12 +134,21 @@ const plugin = {
       requireAuth: true,
       handler: async (ctx) => {
         await initStores();
+        if (!service) {
+          return {
+            ok: false,
+            text: "ClawSpec is still bootstrapping dependencies. Try again in a moment.",
+          };
+        }
         return service.handleProjectCommand(ctx);
       },
     });
 
     api.on("message_received", async (event, ctx) => {
       await stateStore.initialize();
+      if (!service) {
+        return;
+      }
       await service.recordPlanningMessageFromContext({
         channel: ctx.channel ?? ctx.messageProvider ?? ctx.channelId,
         channelId: ctx.channelId,
@@ -149,11 +160,17 @@ const plugin = {
 
     api.on("before_prompt_build", async (event, ctx) => {
       await stateStore.initialize();
+      if (!service) {
+        return;
+      }
       return service.handleBeforePromptBuild(event, ctx);
     });
 
     api.on("agent_end", async (event, ctx) => {
       await stateStore.initialize();
+      if (!service) {
+        return;
+      }
       await service.handleAgentEnd(event, ctx);
     });
   },

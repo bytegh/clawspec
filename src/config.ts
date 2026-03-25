@@ -110,8 +110,8 @@ export const clawspecPluginConfigSchema: OpenClawPluginConfigSchema = {
       advanced: true,
     },
     workerBackendId: {
-      label: "Worker ACP Backend",
-      help: "Optional ACP backend id used for background worker sessions",
+      label: "Deprecated Worker Backend",
+      help: "Deprecated no-op retained for backward compatibility with older configs",
       advanced: true,
     },
     watcherPollIntervalMs: {

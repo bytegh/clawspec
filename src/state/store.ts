@@ -47,22 +47,19 @@ export class ProjectStateStore {
 
   async getActiveProject(channelKey: string): Promise<ProjectState | null> {
     return this.withChannelLock(channelKey, async () => {
-      const mapping = await this.readActiveMap();
-      const record = mapping.channels[channelKey];
+      const record = await this.readActiveRecord(channelKey);
       if (!record) {
         return null;
       }
 
       if (!(await pathExists(record.statePath))) {
-        delete mapping.channels[channelKey];
-        await this.writeActiveMap(mapping);
+        await this.deleteActiveRecordIfMatches(channelKey, record.statePath);
         return null;
       }
 
       const project = await readJsonFile<ProjectState | null>(record.statePath, null);
       if (!project) {
-        delete mapping.channels[channelKey];
-        await this.writeActiveMap(mapping);
+        await this.deleteActiveRecordIfMatches(channelKey, record.statePath);
         return null;
       }
       return project;
@@ -219,8 +216,7 @@ export class ProjectStateStore {
 
   async createProject(channelKey: string): Promise<ProjectState> {
     return this.withChannelLock(channelKey, async () => {
-      const mapping = await this.readActiveMap();
-      const existingRecord = mapping.channels[channelKey];
+      const existingRecord = await this.readActiveRecord(channelKey);
       if (existingRecord && (await pathExists(existingRecord.statePath))) {
         const existingProject = await readJsonFile<ProjectState | null>(existingRecord.statePath, null);
         if (existingProject && existingProject.status !== "archived") {
@@ -244,7 +240,7 @@ export class ProjectStateStore {
         consecutiveNoProgressTurns: 0,
       };
 
-      return this.persistProjectUnlocked(mapping, project, { keepActive: true });
+      return this.persistProjectUnlocked(project, { keepActive: true });
     });
   }
 
@@ -253,26 +249,24 @@ export class ProjectStateStore {
     updater: (current: ProjectState) => ProjectState | Promise<ProjectState>,
   ): Promise<ProjectState> {
     return this.withChannelLock(channelKey, async () => {
-      const mapping = await this.readActiveMap();
-      const record = mapping.channels[channelKey];
+      const record = await this.readActiveRecord(channelKey);
       if (!record) {
         throw new Error("No active project for this channel.");
       }
       const current = await readJsonFile<ProjectState | null>(record.statePath, null);
       if (!current) {
+        await this.deleteActiveRecordIfMatches(channelKey, record.statePath);
         throw new Error("The active project state file could not be loaded.");
       }
       const next = await updater(current);
       next.updatedAt = new Date().toISOString();
-      return this.persistProjectUnlocked(mapping, next, { keepActive: next.status !== "archived" });
+      return this.persistProjectUnlocked(next, { keepActive: next.status !== "archived" });
     });
   }
 
   async clearActiveProject(channelKey: string): Promise<void> {
     await this.withChannelLock(channelKey, async () => {
-      const mapping = await this.readActiveMap();
-      delete mapping.channels[channelKey];
-      await this.writeActiveMap(mapping);
+      await this.deleteActiveRecordIfMatches(channelKey);
     });
   }
 
@@ -397,7 +391,6 @@ export class ProjectStateStore {
   }
 
   private async persistProjectUnlocked(
-    mapping: ActiveProjectMap,
     project: ProjectState,
     options: { keepActive: boolean },
   ): Promise<ProjectState> {
@@ -417,16 +410,41 @@ export class ProjectStateStore {
       await removeIfExists(project.storagePath);
     }
 
-    if (options.keepActive) {
-      mapping.channels[nextProject.channelKey] = {
-        projectId: nextProject.projectId,
-        statePath: targetPath,
-      };
-    } else {
-      delete mapping.channels[nextProject.channelKey];
-    }
-    await this.writeActiveMap(mapping);
+    await this.withActiveMapLock(async () => {
+      const mapping = await this.readActiveMap();
+      if (options.keepActive) {
+        mapping.channels[nextProject.channelKey] = {
+          projectId: nextProject.projectId,
+          statePath: targetPath,
+        };
+      } else {
+        delete mapping.channels[nextProject.channelKey];
+      }
+      await this.writeActiveMap(mapping);
+    });
     return nextProject;
+  }
+
+  private async readActiveRecord(channelKey: string): Promise<ActiveProjectMap["channels"][string] | undefined> {
+    return this.withActiveMapLock(async () => {
+      const mapping = await this.readActiveMap();
+      return mapping.channels[channelKey];
+    });
+  }
+
+  private async deleteActiveRecordIfMatches(channelKey: string, expectedStatePath?: string): Promise<void> {
+    await this.withActiveMapLock(async () => {
+      const mapping = await this.readActiveMap();
+      const record = mapping.channels[channelKey];
+      if (!record) {
+        return;
+      }
+      if (expectedStatePath && record.statePath !== expectedStatePath) {
+        return;
+      }
+      delete mapping.channels[channelKey];
+      await this.writeActiveMap(mapping);
+    });
   }
 }
 

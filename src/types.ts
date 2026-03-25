@@ -32,6 +32,7 @@ export const EXECUTION_STATES = ["armed", "running"] as const;
 export const EXECUTION_RESULT_STATUSES = ["running", "paused", "blocked", "done", "cancelled"] as const;
 export const EXECUTION_MODES = ["apply", "continue"] as const;
 export const EXECUTION_ACTIONS = ["plan", "work"] as const;
+export const EXECUTION_STARTUP_PHASES = ["queued", "starting", "connected", "waiting_for_update", "active"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export type ProjectPhase = (typeof PROJECT_PHASES)[number];
@@ -39,6 +40,7 @@ export type ExecutionState = (typeof EXECUTION_STATES)[number];
 export type ExecutionResultStatus = (typeof EXECUTION_RESULT_STATUSES)[number];
 export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 export type ExecutionAction = (typeof EXECUTION_ACTIONS)[number];
+export type ExecutionStartupPhase = (typeof EXECUTION_STARTUP_PHASES)[number];
 
 export type TaskCountSummary = {
   total: number;
@@ -86,10 +88,14 @@ export type ProjectExecutionState = {
   mode: ExecutionMode;
   action: ExecutionAction;
   state: ExecutionState;
+  startupPhase?: ExecutionStartupPhase;
   workerAgentId?: string;
   workerSlot?: string;
   armedAt: string;
   startedAt?: string;
+  connectedAt?: string;
+  firstProgressAt?: string;
+  lastStartupNoticeAt?: string;
   sessionKey?: string;
   backendId?: string;
   triggerPrompt?: string;
@@ -97,6 +103,7 @@ export type ProjectExecutionState = {
   currentArtifact?: string;
   currentTaskId?: string;
   lastHeartbeatAt?: string;
+  progressOffset?: number;
   restartCount?: number;
   lastRestartAt?: string;
   lastFailure?: string;

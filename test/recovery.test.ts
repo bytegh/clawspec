@@ -190,6 +190,144 @@ test("recovery from mid-crash running state", async () => {
   assert.equal(notifierMessages.some((m) => m.includes("Gateway restarted")), true);
 });
 
+test("startup recovery adopts a live implementation session instead of spawning a new worker", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-adopt-live-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const repoPath = path.join(workspacePath, "demo-app");
+  const changeName = "adopt-live-recovery";
+  const changeDir = path.join(repoPath, "openspec", "changes", changeName);
+  const tasksPath = path.join(changeDir, "tasks.md");
+  const repoStatePaths = getRepoStatePaths(repoPath, "archives");
+  await mkdir(changeDir, { recursive: true });
+  await writeUtf8(tasksPath, "- [x] 1.1 First task\n- [ ] 1.2 Second task\n");
+  await writeUtf8(path.join(changeDir, "proposal.md"), "# Proposal\n");
+
+  const stateStore = new ProjectStateStore(tempRoot, "archives");
+  await stateStore.initialize();
+  const notifierMessages: string[] = [];
+  let runTurnCount = 0;
+  let cancelCount = 0;
+
+  const existingProgress = `${JSON.stringify({
+    version: 1,
+    timestamp: new Date(Date.now() - 60_000).toISOString(),
+    kind: "task_start",
+    current: 2,
+    total: 2,
+    taskId: "1.2",
+    message: "Start 1.2: second task already resumed before gateway crash. Next: finish this task.",
+  })}\n`;
+  await writeUtf8(repoStatePaths.workerProgressFile, existingProgress);
+
+  const fakeAcpClient = {
+    agentId: "codex",
+    runTurn: async () => {
+      runTurnCount += 1;
+    },
+    getSessionStatus: async () => ({
+      summary: "status=alive pid=4242",
+      details: {
+        status: "alive",
+        pid: 4242,
+      },
+    }),
+    cancelSession: async () => {
+      cancelCount += 1;
+    },
+    closeSession: async () => undefined,
+  };
+
+  const channelKey = "discord:adopt-live-recovery:default:main";
+  await stateStore.createProject(channelKey);
+  await stateStore.updateProject(channelKey, (current) => ({
+    ...current,
+    workspacePath,
+    repoPath,
+    projectName: "demo-app",
+    projectTitle: "Demo App",
+    changeName,
+    changeDir,
+    status: "running",
+    phase: "implementing",
+    workerAgentId: "codex",
+    currentTask: "1.2 Second task",
+    taskCounts: { total: 2, complete: 1, remaining: 1 },
+    planningJournal: { dirty: false, entryCount: 0 },
+    execution: {
+      mode: "apply",
+      action: "work",
+      state: "running",
+      workerAgentId: "codex",
+      workerSlot: "primary",
+      armedAt: new Date(Date.now() - 120_000).toISOString(),
+      startedAt: new Date(Date.now() - 90_000).toISOString(),
+      sessionKey: "clawspec:live-session",
+      lastHeartbeatAt: new Date(Date.now() - 15_000).toISOString(),
+      progressOffset: existingProgress.length,
+    },
+  }));
+
+  const manager = new WatcherManager({
+    stateStore,
+    openSpec: createWorkOpenSpec(changeDir, tasksPath),
+    archiveDirName: "archives",
+    logger: createLogger(),
+    notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
+    acpClient: fakeAcpClient as any,
+    pollIntervalMs: 25,
+  });
+
+  setTimeout(() => {
+    void (async () => {
+      const doneEvent = JSON.stringify({
+        version: 1,
+        timestamp: new Date().toISOString(),
+        kind: "task_done",
+        current: 2,
+        total: 2,
+        taskId: "1.2",
+        message: "Done 1.2: finished after gateway recovery. Changed 1 files: openspec/changes/adopt-live-recovery/tasks.md. Next: done.",
+      });
+      await writeUtf8(repoStatePaths.workerProgressFile, `${existingProgress}${doneEvent}\n`);
+      await writeUtf8(tasksPath, "- [x] 1.1 First task\n- [x] 1.2 Second task\n");
+      await writeJsonFile(repoStatePaths.executionResultFile, {
+        version: 1,
+        changeName,
+        mode: "apply",
+        status: "done",
+        timestamp: new Date().toISOString(),
+        summary: "Completed task 1.2.",
+        progressMade: true,
+        completedTask: "1.2 Second task",
+        changedFiles: ["openspec/changes/adopt-live-recovery/tasks.md"],
+        notes: ["Task completed after live-session recovery."],
+        taskCounts: { total: 2, complete: 2, remaining: 0 },
+        remainingTasks: 0,
+      });
+    })();
+  }, 120);
+
+  await manager.start();
+  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
+  await manager.stop();
+
+  const project = await stateStore.getActiveProject(channelKey);
+  assert.equal(project?.status, "done");
+  assert.equal(project?.phase, "validating");
+  assert.equal(runTurnCount, 0);
+  assert.equal(cancelCount >= 1, true);
+  assert.equal(
+    notifierMessages.some((m) =>
+      m.includes("Gateway restarted")
+      && (m.includes("Reattached") || m.includes("Waiting for the next worker update"))
+    ),
+    true,
+  );
+  assert.equal(notifierMessages.some((m) => m.includes("Done 1.2: finished after gateway recovery")), true);
+  assert.equal(notifierMessages.some((m) => m.includes("Start 1.2: second task already resumed before gateway crash")), false);
+  assert.equal(notifierMessages.some((m) => m.includes("Watcher active. Starting codex worker")), false);
+});
+
 test("recovery from recoverable blocked implementation state", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-blocked-"));
   const workspacePath = path.join(tempRoot, "workspace");
