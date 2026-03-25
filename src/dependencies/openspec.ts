@@ -146,7 +146,7 @@ async function runCommand(params: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<CommandResult> {
-  const commandLabel = [params.command, ...params.args].join(" ");
+  const commandLabel = buildShellCommand(params.command, params.args);
   return await new Promise((resolve) => {
     const child = spawn(commandLabel, {
       cwd: params.cwd,
@@ -202,4 +202,38 @@ function describeCommandFailure(result: CommandResult, label: string): string {
   const stderr = result.stderr.trim();
   const stdout = result.stdout.trim();
   return stderr || stdout || `${label} exited with code ${result.code ?? "unknown"}`;
+}
+
+function buildShellCommand(command: string, args: string[]): string {
+  return [command, ...args].map((arg) => quoteShellArg(arg)).join(" ");
+}
+
+function quoteShellArg(arg: string): string {
+  if (process.platform === "win32") {
+    return quoteWindowsShellArg(arg);
+  }
+  return quotePosixShellArg(arg);
+}
+
+function quoteWindowsShellArg(arg: string): string {
+  if (arg.length === 0) {
+    return "\"\"";
+  }
+  const escaped = arg
+    .replace(/"/g, "\"\"")
+    .replace(/%/g, "%%");
+  if (!/[\s"&|<>^()!]/.test(arg)) {
+    return escaped;
+  }
+  return `"${escaped}"`;
+}
+
+function quotePosixShellArg(arg: string): string {
+  if (arg.length === 0) {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) {
+    return arg;
+  }
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
 }

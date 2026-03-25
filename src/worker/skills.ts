@@ -8,9 +8,9 @@ const skillCache = new Map<ClawSpecSkillKey, string>();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const skillPaths: Record<ClawSpecSkillKey, string> = {
-  apply: path.join(repoRoot, ".codex", "skills", "openspec-apply-change", "SKILL.md"),
-  explore: path.join(repoRoot, ".codex", "skills", "openspec-explore", "SKILL.md"),
-  propose: path.join(repoRoot, ".codex", "skills", "openspec-propose", "SKILL.md"),
+  apply: path.join(repoRoot, "skills", "openspec-apply-change.md"),
+  explore: path.join(repoRoot, "skills", "openspec-explore.md"),
+  propose: path.join(repoRoot, "skills", "openspec-propose.md"),
 };
 
 export async function loadClawSpecSkillBundle(keys: ClawSpecSkillKey[]): Promise<string> {

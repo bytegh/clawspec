@@ -104,13 +104,15 @@ If your host disables plugin hooks globally, keyword-based workflow will not wor
 
 ### 1. Install the plugin
 
-Local linked install:
+Recommended public install after publishing to npm:
 
 ```powershell
-openclaw plugins install -l C:\Users\Administrator\rax-plugin\clawspec
+openclaw plugins install clawspec@0.1.0
 ```
 
-If you package and publish ClawSpec later, install it the same way you install any other OpenClaw plugin package. The workflow below assumes the plugin is already discoverable by OpenClaw.
+Current OpenClaw builds do not accept raw GitHub URLs as ordinary plugin install specs. A GitHub repo by itself is not enough for `openclaw plugins install`; the standard public path is an npm package spec such as `clawspec@0.1.0`.
+
+If you want an unreleased commit before npm publish, clone the repository and install from the local checkout or a downloaded `.tgz` archive instead.
 
 ### 2. Enable ACP and ACPX in OpenClaw
 
@@ -177,7 +179,7 @@ That means the gateway host may need network access and a working `npm` if `open
 ## Quick Start
 
 ```text
-/clawspec workspace "D:\dev"
+/clawspec workspace "<workspace-path>"
 /clawspec use "demo-app"
 /clawspec proposal add-login-flow "Build login and session handling"
 Describe the requirement in chat
@@ -318,7 +320,7 @@ This is why `cs-work` may refuse to start and ask for `cs-plan` first: the imple
 
 - the active change context
 - the planning journal
-- imported OpenSpec skill text from `.codex/skills`
+- imported OpenSpec skill text from the bundled `skills/` directory
 
 Imported skill mapping:
 
@@ -519,7 +521,7 @@ node --experimental-strip-types --test test/watcher-work.test.ts
 Useful manual validation flow:
 
 ```text
-/clawspec workspace "D:\dev"
+/clawspec workspace "<workspace-path>"
 /clawspec use "demo-app"
 /clawspec proposal add-something "Build something"
 Discuss requirements in chat
@@ -531,6 +533,12 @@ cs-status
 /clawspec continue
 /clawspec archive
 ```
+
+Typical values for `<workspace-path>`:
+
+- macOS: `~/clawspec/workspace`
+- Linux: `~/clawspec/workspace`
+- Windows: `D:\clawspec\workspace`
 
 ## Implementation Summary
 

@@ -126,9 +126,9 @@ export function buildExecutionPrependContext(params: {
     `- ${params.repoStatePaths.executionControlFile}`,
     `- ${params.repoStatePaths.planningJournalFile}`,
     `- ${tasksPath}`,
-    project.changeDir ? `- ${project.changeDir}\\proposal.md` : "",
-    project.changeDir ? `- ${project.changeDir}\\design.md` : "",
-    project.changeDir ? `- ${project.changeDir}\\specs\\**\\*.md` : "",
+    project.changeDir ? `- ${displayPath(path.join(project.changeDir, "proposal.md"))}` : "",
+    project.changeDir ? `- ${displayPath(path.join(project.changeDir, "design.md"))}` : "",
+    project.changeDir ? `- ${displayPath(path.join(project.changeDir, "specs", "**", "*.md"))}` : "",
     "",
     "Required workflow:",
     "1. Before any tool call or file edit, send a kickoff message in this shape: `Execution started for <change>. Phase: <planning-sync|implementation>. Progress: <complete>/<total> complete, <remaining> remaining. Next: <artifact or task>.`",
@@ -461,4 +461,8 @@ function relativeChangeFile(project: ProjectState, targetPath: string): string {
     return targetPath;
   }
   return path.relative(project.repoPath, resolveProjectScopedPath(project, targetPath)).split(path.sep).join("/");
+}
+
+function displayPath(targetPath: string): string {
+  return targetPath.split(path.sep).join("/");
 }

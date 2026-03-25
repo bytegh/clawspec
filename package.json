@@ -10,11 +10,19 @@
     "project-orchestration",
     "agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytegh/clawspec.git"
+  },
+  "homepage": "https://github.com/bytegh/clawspec#readme",
+  "bugs": {
+    "url": "https://github.com/bytegh/clawspec/issues"
+  },
   "license": "MIT",
   "files": [
     "index.ts",
     "src",
-    ".codex",
+    "skills",
     "test",
     "README.md",
     "README.zh-CN.md",
@@ -23,8 +31,7 @@
   ],
   "openclaw": {
     "extensions": [
-      "./index.ts",
-      "./node_modules/openclaw/extensions/acpx/index.ts"
+      "./index.ts"
     ]
   },
   "peerDependencies": {

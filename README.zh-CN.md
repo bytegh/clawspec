@@ -107,7 +107,7 @@ ClawSpec 依赖这几个 OpenClaw hook：
 本地联动安装示例：
 
 ```powershell
-openclaw plugins install -l C:\Users\Administrator\rax-plugin\clawspec
+openclaw plugins install clawspec@0.1.0
 ```
 
 以后如果你把 ClawSpec 打包发布，也可以按普通 OpenClaw 插件的方式安装。下面的说明默认插件已经被 OpenClaw 发现。
@@ -177,7 +177,7 @@ npm install --omit=dev --no-save @fission-ai/openspec
 ## 快速开始
 
 ```text
-/clawspec workspace "D:\dev"
+/clawspec workspace "<workspace-path>"
 /clawspec use "demo-app"
 /clawspec proposal add-login-flow "Build login and session handling"
 在聊天里继续描述需求
@@ -325,7 +325,7 @@ ClawSpec 的 planning journal 在这里：
 
 - 当前 active change 的上下文
 - planning journal
-- 从 `.codex/skills` 读取的 OpenSpec skill 原文
+- 从打包内置的 `skills/` 目录读取的 OpenSpec skill 原文
 
 当前 skill 映射：
 
@@ -526,7 +526,7 @@ node --experimental-strip-types --test test/watcher-work.test.ts
 手工验证流程：
 
 ```text
-/clawspec workspace "D:\dev"
+/clawspec workspace "<workspace-path>"
 /clawspec use "demo-app"
 /clawspec proposal add-something "Build something"
 在聊天中继续描述需求
