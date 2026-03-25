@@ -7,14 +7,20 @@ import {
   ensureAcpxCli,
 } from "../src/dependencies/acpx.ts";
 
+const ROOT_PREFIX = process.platform === "win32" ? "C:\\clawspec-test" : "/tmp/clawspec-test";
+const OPENCLAW_PREFIX =
+  process.platform === "win32"
+    ? "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\openclaw"
+    : "/opt/openclaw";
+
 const LOCAL_COMMAND = path.join(
-  "C:\\plugin-root",
+  ROOT_PREFIX,
   "node_modules",
   ".bin",
   process.platform === "win32" ? "acpx.cmd" : "acpx",
 );
 const BUILTIN_COMMAND = path.join(
-  "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\openclaw",
+  OPENCLAW_PREFIX,
   "dist",
   "extensions",
   "acpx",
@@ -23,7 +29,7 @@ const BUILTIN_COMMAND = path.join(
   process.platform === "win32" ? "acpx.cmd" : "acpx",
 );
 const OPENCLAW_RUNTIME_ENTRYPOINT = path.join(
-  "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\openclaw",
+  OPENCLAW_PREFIX,
   "dist",
   "index.js",
 );
@@ -31,7 +37,7 @@ const OPENCLAW_RUNTIME_ENTRYPOINT = path.join(
 test("ensureAcpxCli uses the global acpx command when available", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const result = await ensureAcpxCli({
-    pluginRoot: "C:\\plugin-root",
+    pluginRoot: ROOT_PREFIX,
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {
@@ -52,7 +58,7 @@ test("ensureAcpxCli uses the global acpx command when available", async () => {
 test("ensureAcpxCli prefers the OpenClaw builtin acpx over an incompatible PATH acpx", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const result = await ensureAcpxCli({
-    pluginRoot: "C:\\plugin-root",
+    pluginRoot: ROOT_PREFIX,
     runtimeEntrypoint: OPENCLAW_RUNTIME_ENTRYPOINT,
     runner: async ({ command, args }) => {
       calls.push({ command, args });
@@ -80,7 +86,7 @@ test("ensureAcpxCli installs a plugin-local acpx when none is available", async 
   let localCheckCount = 0;
 
   const result = await ensureAcpxCli({
-    pluginRoot: "C:\\plugin-root",
+    pluginRoot: ROOT_PREFIX,
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {
