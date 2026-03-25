@@ -1,0 +1,4 @@
+node_modules/
+tmp review space/
+*.tgz
+.claude/settings.local.json

@@ -1,0 +1,40 @@
+{
+  "name": "clawspec",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenClaw plugin that orchestrates OpenSpec project workflows with visible main-agent execution.",
+  "keywords": [
+    "openclaw",
+    "openspec",
+    "plugin",
+    "project-orchestration",
+    "agent"
+  ],
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src",
+    ".codex",
+    "test",
+    "README.md",
+    "README.zh-CN.md",
+    "openclaw.plugin.json",
+    "tsconfig.json"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./index.ts",
+      "./node_modules/openclaw/extensions/acpx/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "openclaw": ">=0.0.0"
+  },
+  "scripts": {
+    "check": "node --experimental-strip-types -e \"import('./index.ts')\"",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

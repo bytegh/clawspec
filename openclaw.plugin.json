@@ -1,0 +1,129 @@
+{
+  "id": "clawspec",
+  "name": "ClawSpec",
+  "description": "OpenSpec-aware project orchestration for OpenClaw channels",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable the ClawSpec plugin"
+      },
+      "allowedChannels": {
+        "type": "array",
+        "description": "Optional list of channel ids allowed to use /clawspec",
+        "items": {
+          "type": "string"
+        }
+      },
+      "maxAutoContinueTurns": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Deprecated no-op retained for backward compatibility with older configs"
+      },
+      "maxNoProgressTurns": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "description": "Deprecated no-op retained for backward compatibility with older configs"
+      },
+      "openSpecTimeoutMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "maximum": 600000,
+        "description": "Timeout in milliseconds for each OpenSpec CLI invocation"
+      },
+      "workerWaitTimeoutMs": {
+        "type": "integer",
+        "minimum": 10000,
+        "maximum": 3600000,
+        "description": "Deprecated no-op retained for backward compatibility with older configs"
+      },
+      "workerAgentId": {
+        "type": "string",
+        "description": "ACP agent id used for background planning and implementation"
+      },
+      "workerBackendId": {
+        "type": "string",
+        "description": "Optional ACP backend id used for background worker sessions"
+      },
+      "watcherPollIntervalMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "description": "Background watcher recovery poll interval in milliseconds"
+      },
+      "subagentLane": {
+        "type": "string",
+        "description": "Deprecated no-op retained for backward compatibility with older configs"
+      },
+      "archiveDirName": {
+        "type": "string",
+        "description": "Directory name used under .openclaw/clawspec/ for archived runs"
+      },
+      "defaultWorkspace": {
+        "type": "string",
+        "description": "Base directory used for default project browsing and relative /clawspec path inputs"
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable ClawSpec",
+      "help": "Enable or disable the ClawSpec plugin"
+    },
+    "allowedChannels": {
+      "label": "Allowed Channels",
+      "help": "Optional list of channel ids allowed to use /clawspec"
+    },
+    "maxAutoContinueTurns": {
+      "label": "Deprecated Auto Turns",
+      "help": "Deprecated no-op retained for backward compatibility"
+    },
+    "maxNoProgressTurns": {
+      "label": "Deprecated No Progress",
+      "help": "Deprecated no-op retained for backward compatibility"
+    },
+    "openSpecTimeoutMs": {
+      "label": "OpenSpec Timeout",
+      "help": "Timeout in milliseconds for each OpenSpec command",
+      "advanced": true
+    },
+    "workerWaitTimeoutMs": {
+      "label": "Deprecated Worker Timeout",
+      "help": "Deprecated no-op retained for backward compatibility",
+      "advanced": true
+    },
+    "workerAgentId": {
+      "label": "Worker Agent",
+      "help": "ACP agent id used for background planning and implementation turns",
+      "advanced": true
+    },
+    "workerBackendId": {
+      "label": "Worker ACP Backend",
+      "help": "Optional ACP backend id used for background worker sessions",
+      "advanced": true
+    },
+    "watcherPollIntervalMs": {
+      "label": "Watcher Poll Interval",
+      "help": "Background watcher recovery poll interval in milliseconds",
+      "advanced": true
+    },
+    "subagentLane": {
+      "label": "Deprecated Lane Hint",
+      "help": "Deprecated no-op retained for backward compatibility",
+      "advanced": true
+    },
+    "archiveDirName": {
+      "label": "Archive Folder",
+      "help": "Directory name used for archived run bundles",
+      "advanced": true
+    },
+    "defaultWorkspace": {
+      "label": "Default Workspace",
+      "help": "Base directory used for `/clawspec workspace` and `/clawspec use`"
+    }
+  }
+}
