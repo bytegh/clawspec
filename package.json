@@ -37,6 +37,9 @@
   "peerDependencies": {
     "openclaw": ">=0.0.0"
   },
+  "devDependencies": {
+    "openclaw": "2026.3.24"
+  },
   "scripts": {
     "check": "node --experimental-strip-types -e \"import('./index.ts')\"",
     "test": "node --experimental-strip-types --test test/*.test.ts"
