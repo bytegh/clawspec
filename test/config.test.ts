@@ -5,7 +5,7 @@ import { parsePluginConfig } from "../src/config.ts";
 test("parsePluginConfig returns defaults for empty input", () => {
   const config = parsePluginConfig(undefined);
   assert.equal(config.enabled, true);
-  assert.equal(config.workerAgentId, "codex");
+  assert.equal(config.workerAgentId, undefined);
   assert.equal(config.archiveDirName, "archives");
   assert.equal(config.openSpecTimeoutMs, 120_000);
   assert.equal(config.watcherPollIntervalMs, 4_000);
@@ -48,7 +48,7 @@ test("parsePluginConfig ignores invalid types", () => {
   });
   assert.equal(config.enabled, true); // falls back to default
   assert.equal(config.maxAutoContinueTurns, 3); // falls back to default
-  assert.equal(config.workerAgentId, "codex"); // falls back to default
+  assert.equal(config.workerAgentId, undefined); // deprecated and ignored unless explicitly set
 });
 
 test("parsePluginConfig filters allowedChannels", () => {

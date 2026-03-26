@@ -84,6 +84,12 @@ import { WorkspaceStore } from "../workspace/store.ts";
 import { isExecutionTriggerText, readExecutionResult } from "../execution/state.ts";
 import { createWorkerSessionKey, matchesExecutionSession } from "../execution/session.ts";
 import {
+  buildWorkerAgentSetupHint,
+  buildWorkerAgentSetupMessage,
+  getConfiguredDefaultWorkerAgent,
+  listConfiguredWorkerAgents,
+} from "../acp/openclaw-config.ts";
+import {
   buildExecutionPrependContext,
   buildExecutionSystemContext,
   buildProjectPrependContext,
@@ -130,7 +136,7 @@ type ClawSpecServiceOptions = {
   openSpec: OpenSpecClient;
   archiveDirName: string;
   defaultWorkspace: string;
-  defaultWorkerAgentId: string;
+  defaultWorkerAgentId?: string;
   workspaceStore: WorkspaceStore;
   allowedChannels?: string[];
   maxAutoContinueTurns?: number;
@@ -155,7 +161,7 @@ export class ClawSpecService {
   readonly openSpec: OpenSpecClient;
   readonly archiveDirName: string;
   readonly defaultWorkspace: string;
-  readonly defaultWorkerAgentId: string;
+  readonly defaultWorkerAgentId?: string;
   readonly workspaceStore: WorkspaceStore;
   readonly allowedChannels?: string[];
   readonly watcherManager?: WatcherManager;
@@ -1062,7 +1068,7 @@ export class ClawSpecService {
         ...base,
         contextMode: "attached",
         workspacePath: project.workspacePath ?? workspacePath,
-        workerAgentId: base.workerAgentId ?? current.workerAgentId ?? this.defaultWorkerAgentId,
+        workerAgentId: base.workerAgentId ?? current.workerAgentId,
         repoPath,
         projectName,
         projectTitle: sameRepo ? base.projectTitle : projectName,
@@ -1325,7 +1331,8 @@ export class ClawSpecService {
     const project = await this.ensureSessionProject(channelKey, workspacePath);
     const requestedAgent = rawArgs.trim();
     const availableAgents = this.listAvailableWorkerAgents();
-    const currentAgent = project.workerAgentId ?? this.defaultWorkerAgentId;
+    const currentAgent = project.workerAgentId ?? this.getDefaultWorkerAgentId();
+    const defaultAgent = this.getDefaultWorkerAgentId();
 
     if (requestedAgent.toLowerCase() === "status") {
       return okReply(await this.buildWorkerStatusText(project, availableAgents));
@@ -1335,9 +1342,12 @@ export class ClawSpecService {
       const lines = [
         heading("Worker Agent"),
         "",
-        `Current worker agent: \`${currentAgent}\``,
-        `Default worker agent: \`${this.defaultWorkerAgentId}\``,
+        `Current worker agent: ${formatWorkerAgent(currentAgent)}`,
+        `Default worker agent: ${formatWorkerAgent(defaultAgent)}`,
         availableAgents.length > 0 ? `Available agents: ${availableAgents.map((agentId) => `\`${agentId}\``).join(", ")}` : "",
+        !defaultAgent && !project.workerAgentId
+          ? `OpenClaw ACP default is missing. ${buildWorkerAgentSetupHint("work")}`
+          : "",
         "",
         "Use `/clawspec worker <agent-id>` to change the ACP worker agent for this channel/project context.",
       ].filter(Boolean);
@@ -1364,7 +1374,7 @@ export class ClawSpecService {
       [
         heading("Worker Agent Updated"),
         "",
-        `Worker agent: \`${updated.workerAgentId ?? this.defaultWorkerAgentId}\``,
+        `Worker agent: ${formatWorkerAgent(updated.workerAgentId)}`,
         "Future background implementation turns will use this ACP agent.",
       ].join("\n"),
     );
@@ -1414,6 +1424,10 @@ export class ClawSpecService {
     }
     if (hasBlockingExecution(project)) {
       return errorReply(BLOCKING_EXECUTION_MSG);
+    }
+    const workerConfig = this.validateWorkerAgentConfiguration(project, "work");
+    if (!workerConfig.ok) {
+      return workerConfig.result;
     }
 
     const repoStatePaths = getRepoStatePaths(project.repoPath, this.archiveDirName);
@@ -1483,6 +1497,7 @@ export class ClawSpecService {
     }
 
     const armedAt = new Date().toISOString();
+    const workerAgentId = workerConfig.agentId;
 
     await removeIfExists(repoStatePaths.executionResultFile);
     const remainingTasks = apply.tasks.filter((task) => !task.done);
@@ -1503,12 +1518,12 @@ export class ClawSpecService {
         mode,
         action: "work",
         state: "armed",
-        workerAgentId: current.workerAgentId ?? this.defaultWorkerAgentId,
+        workerAgentId,
         workerSlot: "primary",
         armedAt,
         sessionKey: createWorkerSessionKey(current, {
           workerSlot: "primary",
-          workerAgentId: current.workerAgentId ?? this.defaultWorkerAgentId,
+          workerAgentId,
           attemptKey: armedAt,
         }),
       },
@@ -1885,14 +1900,13 @@ export class ClawSpecService {
   private async ensureSessionProject(channelKey: string, workspacePath: string): Promise<ProjectState> {
     const existing = await this.stateStore.getActiveProject(channelKey);
     if (existing) {
-      if (existing.workspacePath && existing.workerAgentId) {
+      if (existing.workspacePath) {
         return existing;
       }
       return await this.stateStore.updateProject(channelKey, (current) => ({
         ...current,
         contextMode: current.contextMode ?? "attached",
         workspacePath: current.workspacePath ?? workspacePath,
-        workerAgentId: current.workerAgentId ?? this.defaultWorkerAgentId,
         status: current.status || "idle",
         phase: current.phase || "init",
       }));
@@ -1904,29 +1918,22 @@ export class ClawSpecService {
       ...current,
       contextMode: current.contextMode ?? "attached",
       workspacePath,
-      workerAgentId: current.workerAgentId ?? this.defaultWorkerAgentId,
       status: "idle",
       phase: "init",
     }));
   }
 
   private listAvailableWorkerAgents(): string[] {
-    const config = this.config as Record<string, unknown>;
-    const acp = config.acp as Record<string, unknown> | undefined;
-    const allowed = Array.isArray(acp?.allowedAgents)
-      ? acp.allowedAgents.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      : [];
-    const agentsConfig = config.agents as Record<string, unknown> | undefined;
-    const listed = Array.isArray(agentsConfig?.list)
-      ? agentsConfig.list
-        .map((entry) => (entry && typeof entry === "object" ? (entry as Record<string, unknown>).id : undefined))
-        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      : [];
-    return Array.from(new Set([...allowed, ...listed])).sort((left, right) => left.localeCompare(right));
+    const configured = listConfiguredWorkerAgents(this.config);
+    if (configured.length > 0) {
+      return configured;
+    }
+    return this.defaultWorkerAgentId ? [this.defaultWorkerAgentId] : [];
   }
 
   private async buildWorkerStatusText(project: ProjectState, availableAgents: string[]): Promise<string> {
-    const configuredAgent = project.workerAgentId ?? this.defaultWorkerAgentId;
+    const configuredAgent = this.getEffectiveWorkerAgentId(project);
+    const defaultAgent = this.getDefaultWorkerAgentId();
     const execution = project.execution;
     const taskCounts = project.taskCounts;
     const runtimeStatus = this.watcherManager?.getWorkerRuntimeStatus
@@ -1961,9 +1968,10 @@ export class ClawSpecService {
       `Context: \`${isProjectContextAttached(project) ? "attached" : "detached"}\``,
       `Phase: \`${project.phase}\``,
       `Lifecycle: \`${project.status}\``,
-      `Configured worker agent: \`${configuredAgent}\``,
-      `Default worker agent: \`${this.defaultWorkerAgentId}\``,
+      `Configured worker agent: ${formatWorkerAgent(configuredAgent)}`,
+      `Default worker agent: ${formatWorkerAgent(defaultAgent)}`,
       availableAgents.length > 0 ? `Available agents: ${availableAgents.map((agentId) => `\`${agentId}\``).join(", ")}` : "",
+      !configuredAgent ? `Worker setup: ${buildWorkerAgentSetupHint("work")}` : "",
       `Execution state: \`${execution?.state ?? "idle"}\``,
       `Worker transport: \`${transportMode}\``,
       `Action: \`${execution?.action ?? "none"}\``,
@@ -2667,7 +2675,7 @@ export class ClawSpecService {
       : project.status === "planning"
         ? "visible-chat"
         : "idle";
-    const workerAgent = project.execution?.workerAgentId ?? project.workerAgentId ?? this.defaultWorkerAgentId;
+    const workerAgent = this.getEffectiveWorkerAgentId(project);
     const showLastExecution = !project.execution;
     const latestExecutionSummary = showLastExecution && project.lastExecution
       ? formatExecutionSummary(project.lastExecution)
@@ -2696,12 +2704,13 @@ export class ClawSpecService {
       `Repo path: ${project.repoPath ? `\`${project.repoPath}\`` : "_unset_"}`,
       `Change: ${project.changeName ? `\`${project.changeName}\`` : "_none_"}`,
       `Context: \`${isProjectContextAttached(project) ? "attached" : "detached"}\``,
-      `Worker agent: \`${workerAgent}\``,
+      `Worker agent: ${formatWorkerAgent(workerAgent)}`,
       `Lifecycle: \`${project.status}\``,
       `Phase: \`${project.phase}\``,
       `Execution: \`${executionStatus}\``,
       formatProjectTaskCounts(project, taskCounts),
       `Planning journal: ${project.planningJournal?.dirty ? "dirty" : "clean"} (${project.planningJournal?.entryCount ?? 0} entries)`,
+      !workerAgent ? `Worker setup: ${buildWorkerAgentSetupHint("work")}` : "",
       nextStepHint ? `Next step: ${nextStepHint}` : "",
       project.latestSummary ? `Latest summary: ${project.latestSummary}` : "Latest summary: _none_",
       project.blockedReason ? `Blocked reason: ${project.blockedReason}` : "",
@@ -2717,6 +2726,39 @@ export class ClawSpecService {
 
     return lines.filter((line, index, array) => !(line === "" && array[index - 1] === "")).join("\n");
   }
+
+  private getDefaultWorkerAgentId(): string | undefined {
+    return getConfiguredDefaultWorkerAgent(this.config) ?? this.defaultWorkerAgentId;
+  }
+
+  private getEffectiveWorkerAgentId(project: ProjectState): string | undefined {
+    return project.execution?.workerAgentId ?? project.workerAgentId ?? this.getDefaultWorkerAgentId();
+  }
+
+  private validateWorkerAgentConfiguration(
+    project: ProjectState,
+    action: "plan" | "work",
+  ): { ok: true; agentId: string } | { ok: false; result: PluginCommandResult } {
+    const workerAgentId = this.getEffectiveWorkerAgentId(project);
+    if (workerAgentId) {
+      return { ok: true, agentId: workerAgentId };
+    }
+    return {
+      ok: false,
+      result: errorReply(
+        [
+          heading("Worker Setup Required"),
+          "",
+          buildWorkerAgentSetupMessage(action),
+          "ClawSpec manages the `acpx` command automatically; only the OpenClaw ACP agent selection is missing.",
+        ].join("\n"),
+      ),
+    };
+  }
+}
+
+function formatWorkerAgent(agentId: string | undefined): string {
+  return agentId ? `\`${agentId}\`` : "_not configured_";
 }
 
 function describeWorkerTransportMode(project: ProjectState): string {

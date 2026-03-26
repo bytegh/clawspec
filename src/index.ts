@@ -18,6 +18,7 @@ import { ClawSpecNotifier } from "./watchers/notifier.ts";
 import { WatcherManager } from "./watchers/manager.ts";
 import { ensureOpenSpecCli } from "./dependencies/openspec.ts";
 import { ensureAcpxCli } from "./dependencies/acpx.ts";
+import { getConfiguredDefaultWorkerAgent } from "./acp/openclaw-config.ts";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_BIN_DIR = path.join(PLUGIN_ROOT, "node_modules", ".bin");
@@ -71,8 +72,9 @@ const plugin = {
           pluginRoot: PLUGIN_ROOT,
           logger: api.logger,
         });
+        const configuredDefaultWorkerAgent = getConfiguredDefaultWorkerAgent(api.config) ?? "codex";
         const acpClient = new AcpWorkerClient({
-          agentId: config.workerAgentId,
+          agentId: configuredDefaultWorkerAgent,
           logger: api.logger,
           command: acpx.command,
           env: acpx.env,
@@ -96,7 +98,7 @@ const plugin = {
           archiveDirName: config.archiveDirName,
           allowedChannels: config.allowedChannels,
           defaultWorkspace: config.defaultWorkspace,
-          defaultWorkerAgentId: config.workerAgentId,
+          defaultWorkerAgentId: undefined,
           workspaceStore,
           watcherManager,
         });

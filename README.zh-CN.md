@@ -241,7 +241,7 @@ openclaw plugins install clawspec@latest
 
 如果你要安装一个还没发布到 npm 的提交，请改用本地 checkout 或下载好的 `.tgz` 包安装。
 
-### 2. 在 OpenClaw 里启用 ACP 和 ACPX
+### 2. 在 OpenClaw 里启用 ACP
 
 示例 `~/.openclaw/openclaw.json`：
 
@@ -254,18 +254,10 @@ openclaw plugins install clawspec@latest
   },
   "plugins": {
     "entries": {
-      "acpx": {
-        "enabled": true,
-        "config": {
-          "permissionMode": "approve-all",
-          "expectedVersion": "any"
-        }
-      },
       "clawspec": {
         "enabled": true,
         "config": {
           "defaultWorkspace": "~/clawspec/workspace",
-          "workerAgentId": "codex",
           "openSpecTimeoutMs": 120000,
           "watcherPollIntervalMs": 4000
         }
@@ -278,21 +270,20 @@ openclaw plugins install clawspec@latest
 这里要注意：
 
 - 新版 OpenClaw 往往已经自带 `acpx`，ClawSpec 现在会先检查这份 builtin ACPX，再回退到系统 `PATH` 或插件本地安装。
-- 如果你的 OpenClaw 没有自带 `acpx`，那就要先单独安装或加载 `acpx`。
-- ClawSpec 自己不携带 ACP runtime backend。
-- 当 ACPX 不可用时，watcher 会在聊天里发一条简短提示，告诉用户去启用 `plugins.entries.acpx` 和 backend `acpx`。
-- `acp.defaultAgent` 是 OpenClaw 自己的 ACP 默认 agent；ClawSpec 的后台 worker 默认看的是 `plugins.entries.clawspec.config.workerAgentId`。
-- 对 ClawSpec 来说，worker 选择优先级是：当前 channel/project 上的 `/clawspec worker <agent-id>` 覆盖，其次是 `clawspec.config.workerAgentId`，最后才是 ClawSpec 自己的内置默认值。
-- 也就是说，ClawSpec 现在不会自动继承 `acp.defaultAgent`。如果你希望两边都用同一个 agent，需要把两处都显式配成一样。
+- 如果你的 OpenClaw 没有自带 `acpx`，ClawSpec 会优先尝试自动落一份插件本地可用的 `acpx`。
+- `acpx` 的命令路径现在由 ClawSpec 自己管理，不需要你再手工写 `plugins.entries.acpx.config.command`。
+- `acp.defaultAgent` 现在就是 ClawSpec 后台 worker 的全局默认 agent。
+- `/clawspec worker <agent-id>` 仍然可以作为当前 channel/project 的显式覆盖。
+- 如果 ACP 配置不完整，ClawSpec 会直接提示可执行命令，比如 `openclaw config set acp.backend acpx` 和 `openclaw config set acp.defaultAgent codex`。
 
 ### 2.5. 选择默认 worker agent
 
-ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或 `claude`，但这里有两个“默认值”要区分：
+ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或 `claude`。现在默认值来源只有一层，再加一个可选覆盖：
 
-- `acp.defaultAgent`：OpenClaw 自己 ACP 系统的默认 agent
-- `plugins.entries.clawspec.config.workerAgentId`：ClawSpec 执行 `cs-work` 时使用的默认 worker agent
+- `acp.defaultAgent`：ClawSpec 后台 worker 读取的全局默认 ACP agent
+- `/clawspec worker <agent-id>`：当前 channel/project 的显式覆盖
 
-如果你希望两层都统一成同一个 agent，建议同时这样配置：
+推荐的全局配置：
 
 ```json
 {
@@ -300,16 +291,6 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
     "enabled": true,
     "backend": "acpx",
     "defaultAgent": "claude"
-  },
-  "plugins": {
-    "entries": {
-      "clawspec": {
-        "enabled": true,
-        "config": {
-          "workerAgentId": "claude"
-        }
-      }
-    }
   }
 }
 ```
@@ -325,7 +306,7 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
 
 - `/clawspec worker <agent-id>` 的覆盖范围是当前 channel/project
 - 你填写的 agent id 必须已经存在于 OpenClaw 的 agent 列表或 ACP allowlist 中
-- 如果你想配置“全局默认”，改的是 `clawspec.config.workerAgentId`
+- 如果你想配置“全局默认”，改的是 `acp.defaultAgent`
 - 如果你想临时对当前项目改用另一个 agent，就直接执行 `/clawspec worker <agent-id>`
 
 ### 2.6. ClawSpec 插件配置项参考
@@ -335,7 +316,6 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
 | Key | 用途 | 说明 |
 | --- | --- | --- |
 | `defaultWorkspace` | `/clawspec workspace` 和 `/clawspec use` 的默认 workspace | 某个 channel 第一次选定 workspace 后，会优先使用该 channel 自己记住的值 |
-| `workerAgentId` | 后台 worker 默认使用的 ACP agent | 可以被 `/clawspec worker <agent-id>` 在当前 channel/project 覆盖 |
 | `openSpecTimeoutMs` | 每次 OpenSpec CLI 调用的超时时间 | repo 较大或主机较慢时可以调大 |
 | `watcherPollIntervalMs` | watcher 的后台恢复扫描周期 | 影响恢复检查和进度补发的灵敏度 |
 | `archiveDirName` | `.openclaw/clawspec/` 下归档目录名称 | 除非你要调整归档布局，否则保持默认即可 |
@@ -345,6 +325,7 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
 
 - `maxAutoContinueTurns`
 - `maxNoProgressTurns`
+- `workerAgentId`
 - `workerBackendId`
 - `workerWaitTimeoutMs`
 - `subagentLane`
@@ -835,16 +816,15 @@ OpenSpec change 本身仍然放在标准目录：
 
 - `acp.enabled` 没开
 - `acp.backend` 不是 `acpx`
-- `plugins.entries.acpx.enabled` 没开
-- 你的 OpenClaw 没有自带 ACPX，也没有单独安装/加载
+- `acp.defaultAgent` 没配
+- 你的 OpenClaw 没有自带 ACPX，且 ClawSpec 也没能找到或安装可用副本
 
 处理方式：
 
-1. 打开 ACP
-2. 把 backend 设成 `acpx`
-3. 启用 `plugins.entries.acpx`
-4. 如果宿主没自带 ACPX，就先安装或加载它
-5. 再运行 `cs-work` 或 `/clawspec continue`
+1. 运行 `openclaw config set acp.backend acpx`
+2. 运行 `openclaw config set acp.defaultAgent codex`
+3. 如果宿主没自带 ACPX，就让 ClawSpec 自动安装插件本地副本，或手工安装 `acpx`
+4. 再运行 `cs-work` 或 `/clawspec continue`
 
 ### 普通聊天污染了 planning journal
 

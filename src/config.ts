@@ -11,7 +11,7 @@ export type ClawSpecPluginConfig = {
   maxAutoContinueTurns: number;
   maxNoProgressTurns: number;
   workerWaitTimeoutMs: number;
-  workerAgentId: string;
+  workerAgentId?: string;
   workerBackendId?: string;
   watcherPollIntervalMs: number;
   subagentLane?: string;
@@ -105,8 +105,8 @@ export const clawspecPluginConfigSchema: OpenClawPluginConfigSchema = {
       advanced: true,
     },
     workerAgentId: {
-      label: "Worker Agent",
-      help: "Agent id used for background ACP planning and implementation turns",
+      label: "Deprecated Worker Agent",
+      help: "Deprecated no-op. Configure `acp.defaultAgent` in OpenClaw instead.",
       advanced: true,
     },
     workerBackendId: {
@@ -142,7 +142,6 @@ const DEFAULT_CONFIG: ClawSpecPluginConfig = {
   maxNoProgressTurns: 2,
   openSpecTimeoutMs: 120_000,
   workerWaitTimeoutMs: 300_000,
-  workerAgentId: "codex",
   watcherPollIntervalMs: 4_000,
   archiveDirName: "archives",
   defaultWorkspace: getDefaultWorkspacePath(),
@@ -181,7 +180,7 @@ export function parsePluginConfig(
       10_000,
       3_600_000,
     ),
-    workerAgentId: asOptionalString(config.workerAgentId) ?? DEFAULT_CONFIG.workerAgentId,
+    workerAgentId: asOptionalString(config.workerAgentId),
     workerBackendId: asOptionalString(config.workerBackendId),
     watcherPollIntervalMs: asInt(
       config.watcherPollIntervalMs,

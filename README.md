@@ -236,7 +236,7 @@ Current OpenClaw builds do not accept raw GitHub URLs as ordinary plugin install
 
 If you want an unreleased commit before npm publish, clone the repository and install from the local checkout or a downloaded `.tgz` archive instead.
 
-### 2. Enable ACP and ACPX in OpenClaw
+### 2. Enable ACP in OpenClaw
 
 Example `~/.openclaw/openclaw.json`:
 
@@ -249,18 +249,10 @@ Example `~/.openclaw/openclaw.json`:
   },
   "plugins": {
     "entries": {
-      "acpx": {
-        "enabled": true,
-        "config": {
-          "permissionMode": "approve-all",
-          "expectedVersion": "any"
-        }
-      },
       "clawspec": {
         "enabled": true,
         "config": {
           "defaultWorkspace": "~/clawspec/workspace",
-          "workerAgentId": "codex",
           "openSpecTimeoutMs": 120000,
           "watcherPollIntervalMs": 4000
         }
@@ -273,21 +265,21 @@ Example `~/.openclaw/openclaw.json`:
 Important notes:
 
 - Recent OpenClaw builds often bundle `acpx` under the host install. ClawSpec checks that builtin copy before falling back to `acpx` on `PATH` or a plugin-local install.
-- If your OpenClaw build does not bundle `acpx`, install or load it separately before relying on `cs-work`.
-- ClawSpec itself does not ship its own ACP runtime backend.
-- When ACPX is unavailable, the watcher now reports a short recovery hint in chat telling the user to enable `plugins.entries.acpx` and backend `acpx`.
-- `acp.defaultAgent` is the OpenClaw ACP default. ClawSpec background workers use `plugins.entries.clawspec.config.workerAgentId` by default.
-- For ClawSpec worker selection, precedence is: `/clawspec worker <agent-id>` for the current channel/project, then `clawspec.config.workerAgentId`, then the built-in ClawSpec fallback.
-- In other words, ClawSpec does not currently inherit `acp.defaultAgent` automatically. If you want both to use the same agent, set both values explicitly.
+- If your OpenClaw build does not bundle `acpx`, ClawSpec can fall back to a plugin-local install automatically.
+- ClawSpec manages the `acpx` command path itself. You do not need to hardcode `plugins.entries.acpx.config.command`.
+- `acp.defaultAgent` is now the global default used by ClawSpec background workers.
+- `/clawspec worker <agent-id>` is still available as an explicit channel/project override.
+- When ACP setup is incomplete, ClawSpec now shows ready-to-run commands such as `openclaw config set acp.backend acpx` and `openclaw config set acp.defaultAgent codex`.
 
 ### 2.5. Choose the default worker agent
 
-ClawSpec can run background work with different ACP agents such as `codex` or `claude`, but there are two separate defaults to understand:
+ClawSpec can run background work with different ACP agents such as `codex` or `claude`.
+There is now one global default source plus an optional per-channel override:
 
-- `acp.defaultAgent`: the OpenClaw ACP default used by the host ACP system
-- `plugins.entries.clawspec.config.workerAgentId`: the ClawSpec default used by `cs-work`
+- `acp.defaultAgent`: the OpenClaw ACP default used by ClawSpec workers
+- `/clawspec worker <agent-id>`: an explicit override persisted for the current channel/project context
 
-Recommended if you want both layers aligned:
+Recommended global setup:
 
 ```json
 {
@@ -295,16 +287,6 @@ Recommended if you want both layers aligned:
     "enabled": true,
     "backend": "acpx",
     "defaultAgent": "claude"
-  },
-  "plugins": {
-    "entries": {
-      "clawspec": {
-        "enabled": true,
-        "config": {
-          "workerAgentId": "claude"
-        }
-      }
-    }
   }
 }
 ```
@@ -320,7 +302,7 @@ Notes:
 
 - `/clawspec worker <agent-id>` is persisted at the current channel/project scope
 - the chosen agent must exist in your OpenClaw agent list or ACP allowlist
-- if you want a global default, set `workerAgentId` in OpenClaw config
+- if you want a global default, set `acp.defaultAgent` in OpenClaw config
 - if you want a one-off override for the active project conversation, use `/clawspec worker <agent-id>`
 
 ### 2.6. ClawSpec plugin config reference
@@ -330,7 +312,6 @@ Common `plugins.entries.clawspec.config` fields:
 | Key | Purpose | Notes |
 | --- | --- | --- |
 | `defaultWorkspace` | Default base directory used by `/clawspec workspace` and `/clawspec use` | Channel-specific workspace selection overrides this after first use |
-| `workerAgentId` | Default ACP agent used by background workers | Can be overridden per channel/project with `/clawspec worker <agent-id>` |
 | `openSpecTimeoutMs` | Timeout for each OpenSpec CLI invocation | Increase this if your repo or host is slow |
 | `watcherPollIntervalMs` | Background watcher recovery poll interval | Controls how quickly recovery scans and replay checks run |
 | `archiveDirName` | Directory name under `.openclaw/clawspec/` for archived bundles | Keep the default unless you need a different archive layout |
@@ -340,6 +321,7 @@ Backward-compatibility keys still accepted but currently treated as no-ops:
 
 - `maxAutoContinueTurns`
 - `maxNoProgressTurns`
+- `workerAgentId`
 - `workerBackendId`
 - `workerWaitTimeoutMs`
 - `subagentLane`
@@ -823,16 +805,15 @@ Cause:
 
 - `acp.enabled` is false
 - `acp.backend` is not `acpx`
-- `plugins.entries.acpx.enabled` is false
-- your OpenClaw build does not bundle `acpx` and it was never installed/loaded
+- `acp.defaultAgent` is missing
+- your OpenClaw build does not bundle `acpx` and ClawSpec could not find or install a usable copy
 
 What to do:
 
-1. enable ACP
-2. set backend to `acpx`
-3. enable `plugins.entries.acpx`
-4. if your host does not bundle ACPX, install/load it first
-5. rerun `cs-work` or `/clawspec continue`
+1. run `openclaw config set acp.backend acpx`
+2. run `openclaw config set acp.defaultAgent codex`
+3. if your host does not bundle ACPX, let ClawSpec install a plugin-local copy or install `acpx` manually
+4. rerun `cs-work` or `/clawspec continue`
 
 ### Ordinary chat is polluting the planning journal
 

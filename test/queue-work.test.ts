@@ -108,3 +108,55 @@ test("main chat agent end does not clear a background worker run", async () => {
   assert.equal(project?.execution?.sessionKey, workerSessionKey);
   assert.equal(project?.latestSummary, "Worker is running in the background.");
 });
+
+test("work requires OpenClaw ACP default agent when no project override is set", async () => {
+  const harness = await createServiceHarness("clawspec-work-missing-acp-");
+  const { service, stateStore, watcherManager, repoPath, workspacePath, changeDir } = harness;
+  const channelKey = "discord:work-missing-acp:default:main";
+  const tasksPath = path.join(changeDir, "tasks.md");
+  await writeUtf8(tasksPath, "- [ ] 1.1 Build the demo endpoint\n");
+
+  (service as any).config = {
+    acp: {
+      backend: "acpx",
+    },
+  };
+
+  harness.openSpec.instructionsApply = async (cwd: string, changeName: string) => ({
+    command: `openspec instructions apply --change ${changeName} --json`,
+    cwd,
+    stdout: "{}",
+    stderr: "",
+    durationMs: 1,
+    parsed: {
+      changeName,
+      changeDir,
+      schemaName: "spec-driven",
+      contextFiles: { tasks: tasksPath },
+      progress: { total: 1, complete: 0, remaining: 1 },
+      tasks: [{ id: "1.1", description: "Build the demo endpoint", done: false }],
+      state: "ready",
+      instruction: "Implement the remaining task.",
+    },
+  });
+
+  await seedPlanningProject(stateStore, channelKey, {
+    workspacePath,
+    repoPath,
+    projectName: "demo-app",
+    changeName: "queue-work",
+    changeDir,
+    phase: "tasks",
+    status: "ready",
+    planningDirty: false,
+  });
+
+  const result = await service.queueWorkProject(channelKey, "apply");
+  const project = await stateStore.getActiveProject(channelKey);
+
+  assert.match(result.text ?? "", /Worker Setup Required/);
+  assert.match(result.text ?? "", /openclaw config set acp\.backend acpx/);
+  assert.match(result.text ?? "", /openclaw config set acp\.defaultAgent codex/);
+  assert.equal(project?.status, "ready");
+  assert.deepEqual(watcherManager.wakeCalls, []);
+});

@@ -7,6 +7,7 @@ import type {
 } from "../types.ts";
 import type { RepoStatePaths } from "../utils/paths.ts";
 import { resolveProjectScopedPath } from "../utils/paths.ts";
+import { buildWorkerIoEventCommandPrefix } from "./io-helper.ts";
 
 export function buildExecutionSystemContext(repoPath: string, importedSkills?: string): string {
   return [
@@ -368,6 +369,11 @@ export function buildAcpImplementationTurnPrompt(params: {
   const contextLabels = contextPaths.map((contextPath) => displayPath(contextPath));
   const firstContextLabel = contextLabels[0] ?? displayPath(tasksPath);
   const afterContextLabel = contextLabels[1] ?? `start task ${params.task.id}`;
+  const workerIoCommandPrefix = buildWorkerIoEventCommandPrefix(params.repoStatePaths);
+  const progressCommandTemplate =
+    `${workerIoCommandPrefix} --kind <status|task_start|task_done|blocked> --current <n> --total ${params.tasks.length} --task-id "<task-id>" --message "<message>"`;
+  const preparingCommandExample =
+    `${workerIoCommandPrefix} --kind status --current 1 --total ${params.tasks.length} --task-id "${params.task.id}" --message "Preparing ${params.task.id}: loading context. Next: read ${firstContextLabel}."`;
 
   const taskList = params.tasks.map((task) => `- ${task.id} ${task.description}`).join("\n");
 
@@ -388,7 +394,8 @@ export function buildAcpImplementationTurnPrompt(params: {
     "- Keep changes minimal and scoped to the active change.",
     "- Do not inspect or modify sibling `openspec/changes/<other-change>` directories.",
     `- Update ${tasksPath} by switching each task from \`- [ ]\` to \`- [x]\` as you complete it.`,
-    `- Append short progress events to ${params.repoStatePaths.workerProgressFile} as valid JSON Lines.`,
+    `- Use the worker IO helper instead of editing ${params.repoStatePaths.workerProgressFile} directly.`,
+    `- Worker IO helper command template: ${progressCommandTemplate}`,
     "- Progress events must be human-readable, one line each, and must match the actual work completed.",
     `- Every progress event must include \`current\` (current task number) and \`total\` (total task count for this run).`,
     `- Do not stay silent until \`task_start\`. Emit context-loading progress first.`,
@@ -406,6 +413,9 @@ export function buildAcpImplementationTurnPrompt(params: {
     "",
     "Context files to read first:",
     ...contextPaths.map((contextPath) => `- ${contextPath}`),
+    "",
+    "Worker IO helper example:",
+    fence(preparingCommandExample, "bash"),
     "",
     "Worker progress JSONL event template:",
     fence(JSON.stringify({

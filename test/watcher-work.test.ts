@@ -1462,7 +1462,7 @@ test("watcher blocked message includes ACPX setup guidance when backend stays un
   assert.equal(project?.status, "blocked");
   assert.equal(project?.blockedReason?.includes("Blocked after 10 ACP restart attempts"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-blocked", "Blocked: ACPX backend unavailable"), true);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-blocked", "plugins.entries.acpx"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-blocked", "openclaw config set acp.defaultAgent codex"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-blocked", "cs-work"), true);
 });
 
@@ -1590,8 +1590,8 @@ test("watcher retries when ACP runtime backend is temporarily unavailable", asyn
   assert.equal(project?.status, "done");
   assert.equal(runCount, 2);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "Restarting ACP worker"), true);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "ACPX is unavailable"), true);
-  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "plugins.entries.acpx"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "OpenClaw ACP is unavailable"), true);
+  assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "openclaw config set acp.defaultAgent codex"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "All tasks complete"), true);
 });
 

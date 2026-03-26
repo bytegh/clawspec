@@ -30,8 +30,10 @@ import {
 } from "../utils/fs.ts";
 import { getChangeDir, getRepoStatePaths, getTasksPath, resolveProjectScopedPath } from "../utils/paths.ts";
 import { loadClawSpecSkillBundle } from "../worker/skills.ts";
+import { ensureWorkerIoHelper } from "../worker/io-helper.ts";
 import { buildAcpImplementationTurnPrompt, buildAcpPlanningTurnPrompt } from "../worker/prompts.ts";
 import { AcpWorkerClient, type AcpWorkerEvent, type AcpWorkerStatus } from "../acp/client.ts";
+import { buildWorkerAgentSetupHint } from "../acp/openclaw-config.ts";
 import { ClawSpecNotifier } from "./notifier.ts";
 
 type WatcherManagerOptions = {
@@ -228,7 +230,7 @@ export class WatcherManager {
 
     const action: ProjectExecutionState["action"] =
       project.phase === "planning_sync" || project.status === "planning" ? "plan" : "work";
-    const workerAgentId = project.workerAgentId ?? this.acpClient.agentId;
+    const workerAgentId = project.execution?.workerAgentId ?? project.workerAgentId ?? this.acpClient.agentId;
     const armedAt = new Date().toISOString();
     const sessionKey = createWorkerSessionKey(project, {
       workerSlot: "primary",
@@ -2121,6 +2123,7 @@ function toRepoRelative(project: ProjectState, targetPath: string): string {
 
 async function ensureSupportFiles(repoStatePaths: ReturnType<typeof getRepoStatePaths>): Promise<void> {
   await ensureDir(repoStatePaths.root);
+  await ensureWorkerIoHelper(repoStatePaths);
   if (!(await pathExists(repoStatePaths.progressFile))) {
     await writeUtf8(repoStatePaths.progressFile, "# Progress\n");
   }
@@ -2177,6 +2180,7 @@ async function resetRunSupportFiles(
   latestSummary: string,
 ): Promise<void> {
   await ensureDir(repoStatePaths.root);
+  await ensureWorkerIoHelper(repoStatePaths);
   await writeUtf8(repoStatePaths.progressFile, "# Progress\n");
   await writeUtf8(repoStatePaths.workerProgressFile, "");
   await writeUtf8(repoStatePaths.changedFilesFile, "# Changed Files\n");
@@ -2329,9 +2333,7 @@ function isUnavailableAcpBackendFailure(message: string): boolean {
 }
 
 function buildAcpSetupHint(action: ProjectExecutionState["action"]): string {
-  return action === "plan"
-    ? "Enable `plugins.entries.acpx` + backend `acpx`; install/load `acpx` if needed; rerun `cs-plan`."
-    : "Enable `plugins.entries.acpx` + backend `acpx`; install/load `acpx` if needed; rerun `cs-work`.";
+  return buildWorkerAgentSetupHint(action);
 }
 
 function buildBlockedNextStep(project: ProjectState, blocker: string): string {
@@ -2362,7 +2364,7 @@ function buildWorkerRestartMessage(params: {
   delayMs: number;
 }): string {
   if (isUnavailableAcpBackendFailure(params.failureMessage)) {
-    return `Restarting ACP worker (attempt ${params.restartCount}) failed because ACPX is unavailable. Next: enable \`plugins.entries.acpx\` and backend \`acpx\`, or install/load \`acpx\`.`;
+    return `Restarting ACP worker (attempt ${params.restartCount}) failed because OpenClaw ACP is unavailable. Next: ${buildAcpSetupHint(params.action)}`;
   }
   const retryDelaySeconds = Math.ceil(params.delayMs / 1000);
   const retryTarget = formatWorkerRetryTarget(params.action, params.nextDetail);
@@ -2612,7 +2614,7 @@ const WORKER_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEAD_SESSION_GRACE_MS = 2_000;
 const WORKER_STARTUP_GRACE_MS = 3_000;
 const WORKER_STARTUP_WAIT_NOTIFY_DELAY_MS = 8_000;
-const WORKER_STARTUP_WAIT_NOTIFY_INTERVAL_MS = 20_000;
+const WORKER_STARTUP_WAIT_NOTIFY_INTERVAL_MS = 60_000;
 const QUEUE_OWNER_UNAVAILABLE_STARTUP_GRACE_MS = 4_500;
 const RUN_TURN_SETTLE_GRACE_MS = 1_500;
 const MAX_WORKER_RESTART_ATTEMPTS = 10;

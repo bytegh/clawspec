@@ -1,6 +1,6 @@
 {
   "name": "clawspec",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "OpenClaw plugin that orchestrates OpenSpec project workflows with visible main-agent execution.",
   "keywords": [
@@ -43,7 +43,7 @@
   "scripts": {
     "check": "node --experimental-strip-types -e \"import('./index.ts')\"",
     "test": "node --experimental-strip-types --test --test-reporter spec test/*.test.ts",
-    "test:fast": "node --experimental-strip-types --test --test-reporter spec test/acp-client.test.ts test/acpx-dependency.test.ts test/assistant-journal.test.ts test/command-surface.test.ts test/config.test.ts test/detach-attach.test.ts test/file-lock.test.ts test/fs-utils.test.ts test/helpers.test.ts test/keywords.test.ts test/notifier.test.ts test/openspec-dependency.test.ts test/pause-cancel.test.ts test/planning-journal.test.ts test/plugin-registration.test.ts test/project-memory.test.ts test/proposal.test.ts test/queue-planning.test.ts test/queue-work.test.ts test/service-archive.test.ts test/shell-command.test.ts test/state-store.test.ts test/tasks-and-checkpoint.test.ts test/use-project.test.ts test/worker-command.test.ts test/worker-skills.test.ts",
+    "test:fast": "node --experimental-strip-types --test --test-reporter spec test/acp-client.test.ts test/acpx-dependency.test.ts test/assistant-journal.test.ts test/command-surface.test.ts test/config.test.ts test/detach-attach.test.ts test/file-lock.test.ts test/fs-utils.test.ts test/helpers.test.ts test/keywords.test.ts test/notifier.test.ts test/openspec-dependency.test.ts test/pause-cancel.test.ts test/planning-journal.test.ts test/plugin-registration.test.ts test/project-memory.test.ts test/proposal.test.ts test/queue-planning.test.ts test/queue-work.test.ts test/service-archive.test.ts test/shell-command.test.ts test/state-store.test.ts test/tasks-and-checkpoint.test.ts test/use-project.test.ts test/worker-command.test.ts test/worker-io-helper.test.ts test/worker-skills.test.ts",
     "test:slow": "node --experimental-strip-types --test --test-reporter spec test/watcher-planning.test.ts test/watcher-work.test.ts test/recovery.test.ts"
   },
   "engines": {

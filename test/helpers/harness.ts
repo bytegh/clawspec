@@ -155,17 +155,41 @@ export async function createServiceHarness(prefix: string): Promise<{
   const watcherManager = createFakeWatcherManager();
   const service = new ClawSpecService({
     api: {
-      config: {},
+      config: {
+        acp: {
+          backend: "acpx",
+          defaultAgent: "codex",
+          allowedAgents: ["codex", "piper"],
+        },
+        agents: {
+          list: [
+            { id: "codex" },
+            { id: "piper" },
+          ],
+        },
+      },
       logger: createLogger(),
     } as any,
-    config: {} as any,
+    config: {
+      acp: {
+        backend: "acpx",
+        defaultAgent: "codex",
+        allowedAgents: ["codex", "piper"],
+      },
+      agents: {
+        list: [
+          { id: "codex" },
+          { id: "piper" },
+        ],
+      },
+    } as any,
     logger: createLogger(),
     stateStore,
     memoryStore,
     openSpec: openSpec as any,
     archiveDirName: "archives",
     defaultWorkspace: workspacePath,
-    defaultWorkerAgentId: "codex",
+    defaultWorkerAgentId: undefined,
     workspaceStore,
     watcherManager: watcherManager as any,
   });

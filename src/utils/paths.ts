@@ -7,6 +7,7 @@ export type RepoStatePaths = {
   executionControlFile: string;
   executionResultFile: string;
   workerProgressFile: string;
+  workerIoFile: string;
   progressFile: string;
   changedFilesFile: string;
   decisionLogFile: string;
@@ -66,6 +67,7 @@ export function getRepoStatePaths(repoPath: string, archiveDirName: string): Rep
     executionControlFile: path.join(root, "execution-control.json"),
     executionResultFile: path.join(root, "execution-result.json"),
     workerProgressFile: path.join(root, "worker-progress.jsonl"),
+    workerIoFile: path.join(root, "worker_io.mjs"),
     progressFile: path.join(root, "progress.md"),
     changedFilesFile: path.join(root, "changed-files.md"),
     decisionLogFile: path.join(root, "decision-log.md"),

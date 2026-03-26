@@ -57,14 +57,19 @@ test("service writes archive bundles from visible-execution state", async () => 
 
   const service = new ClawSpecService({
     api: fakeApi,
-    config: {} as any,
+    config: {
+      acp: {
+        backend: "acpx",
+        defaultAgent: "codex",
+      },
+    } as any,
     logger: fakeApi.logger,
     stateStore,
     memoryStore,
     openSpec: {} as any,
     archiveDirName: "archives",
     defaultWorkspace: workspacePath,
-    defaultWorkerAgentId: "codex",
+    defaultWorkerAgentId: undefined,
     workspaceStore,
   });
 
