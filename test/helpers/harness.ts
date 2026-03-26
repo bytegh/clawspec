@@ -133,6 +133,27 @@ export async function createServiceHarness(prefix: string): Promise<{
         ],
       },
     }),
+    instructionsArtifact: async (cwd: string, artifactId: string, changeName: string) => ({
+      command: `openspec instructions ${artifactId} --change ${changeName} --json`,
+      cwd,
+      stdout: "{}",
+      stderr: "",
+      durationMs: 1,
+      parsed: {
+        changeName,
+        artifactId,
+        schemaName: "spec-driven",
+        changeDir,
+        outputPath: artifactId === "specs"
+          ? path.join(changeDir, "specs", "demo-spec", "spec.md")
+          : path.join(changeDir, `${artifactId}.md`),
+        description: `Refresh ${artifactId}`,
+        instruction: `Use ${artifactId} template`,
+        template: `# ${artifactId}`,
+        dependencies: [],
+        unlocks: [],
+      },
+    }),
     instructionsApply: async (cwd: string, changeName: string) => ({
       command: `openspec instructions apply --change ${changeName} --json`,
       cwd,

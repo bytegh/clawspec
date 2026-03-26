@@ -139,6 +139,7 @@ export function buildExecutionPrependContext(params: {
     "4. If planning-journal state is dirty or planning artifacts are missing, sync `proposal`, `specs`, `design`, and `tasks` in order using `openspec instructions <artifact> --change <name> --json`.",
     "5. After planning sync, run `openspec instructions apply --change <name> --json`, read the returned context files, and use that instruction as the implementation guide.",
     "6. Execute unchecked tasks from tasks.md sequentially. Each time a task is fully complete, update its checkbox from `- [ ]` to `- [x]` immediately.",
+    "6.1 For code-change tasks, add or update automated tests before marking the task done, and report the test command/result in progress updates.",
     "7. Between artifacts and tasks, re-check execution-control.json for pauseRequested or cancelRequested.",
     "8. Keep OpenSpec command activity visible by running those commands normally in this chat.",
     "9. Keep the user informed in this chat with explicit progress messages.",
@@ -177,6 +178,7 @@ export function buildPlanningPrependContext(params: {
   scaffoldOnly?: boolean;
   mode: "discussion" | "sync";
   nextActionHint?: "plan" | "work";
+  prefetchedInstructions?: OpenSpecInstructionsResponse[];
 }): string {
   const project = params.project;
 
@@ -185,16 +187,17 @@ export function buildPlanningPrependContext(params: {
         "Required workflow for this turn:",
         "0. The active change directory shown above is the only OpenSpec change directory you may inspect or modify in this turn.",
         "1. Read planning-journal.jsonl, .openspec.yaml, and any planning artifacts that already exist.",
-        "2. Use the current visible chat context plus the planning journal to decide whether there are substantive new requirements, constraints, or design changes since the last planning sync.",
-        "3. If there is no substantive planning change, say so clearly in chat and do not rewrite artifacts unnecessarily.",
-        "4. Run `openspec status --change <name> --json` to inspect artifact readiness.",
-        "5. If artifacts are missing or stale, use `openspec instructions <artifact> --change <name> --json` and update `proposal`, `specs`, `design`, and `tasks` in dependency order.",
-        "6. Keep OpenSpec command activity visible by running those commands normally in this chat.",
+        "2. Treat the prefetched OpenSpec instruction files in this context as the authoritative source for artifact structure, output paths, and writing guidance.",
+        "3. Use the current visible chat context plus the planning journal to decide whether there are substantive new requirements, constraints, or design changes since the last planning sync.",
+        "4. If there is no substantive planning change, say so clearly in chat and do not rewrite artifacts unnecessarily.",
+        "5. If artifacts are missing or stale, update `proposal`, `specs`, `design`, and `tasks` in dependency order using those prefetched OpenSpec instruction files.",
+        "6. Do not generate or rewrite planning artifacts from ad-hoc structure guesses; follow OpenSpec instruction/template constraints only.",
         "7. Before updating each artifact, post a short chat update naming the artifact you are about to refresh.",
         "8. After updating each artifact, post a short chat update describing what changed and what artifact comes next.",
-        "9. Stop after planning artifacts are refreshed and apply-ready. Do not implement code in this turn.",
-        "10. End with a concise summary and a mandatory final line exactly in this shape: `Next: run `cs-work` to start implementation.`",
-        "11. Never scan sibling directories under `openspec/changes`, never switch to another change, and never restore or rewrite unrelated files.",
+        "9. For any implementation-oriented task item, ensure tasks.md contains an explicit testing task (new tests or updated tests) and a validation command.",
+        "10. Stop after planning artifacts are refreshed and apply-ready. Do not implement code in this turn.",
+        "11. End with a concise summary and a mandatory final line exactly in this shape: `Next: run `cs-work` to start implementation.`",
+        "12. Never scan sibling directories under `openspec/changes`, never switch to another change, and never restore or rewrite unrelated files.",
       ]
     : [
         "Discussion rules for this turn:",
@@ -232,6 +235,14 @@ export function buildPlanningPrependContext(params: {
     "",
     "Read these files before responding:",
     ...params.contextPaths.map((contextPath) => `- ${contextPath}`),
+    params.mode === "sync" ? "" : "",
+    params.mode === "sync" ? "Prefetched OpenSpec instructions for this turn:" : "",
+    ...(params.mode === "sync"
+      ? (params.prefetchedInstructions ?? [])
+        .map((instruction) =>
+          `- ${instruction.artifactId}: ${displayPath(resolveProjectScopedPath(project, instruction.outputPath))}`,
+        )
+      : []),
     params.scaffoldOnly ? "" : "",
     params.scaffoldOnly ? "Only the change scaffold exists right now. That is expected before planning sync generates the first artifacts." : "",
     "",

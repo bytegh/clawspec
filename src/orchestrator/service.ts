@@ -23,6 +23,7 @@ import type {
   ExecutionResult,
   OpenSpecApplyInstructionsResponse,
   OpenSpecCommandResult,
+  OpenSpecInstructionsResponse,
   OpenSpecStatusResponse,
   ProjectState,
   TaskCountSummary,
@@ -566,6 +567,7 @@ export class ClawSpecService {
   private async buildPlanningSyncInjection(
     project: ProjectState,
     userPrompt: string,
+    instructionResults: Array<OpenSpecCommandResult<OpenSpecInstructionsResponse>>,
   ): Promise<{ prependContext?: string; prependSystemContext?: string }> {
     const repoStatePaths = getRepoStatePaths(project.repoPath!, this.archiveDirName);
     await this.ensureProjectSupportFiles(project);
@@ -584,13 +586,19 @@ export class ClawSpecService {
         contextPaths: planningContext.paths,
         scaffoldOnly: planningContext.scaffoldOnly,
         mode: "sync",
+        prefetchedInstructions: instructionResults.map((result) => result.parsed!).filter(Boolean),
       }),
     };
   }
 
   private async preparePlanningSync(channelKey: string): Promise<
     | { result: PluginCommandResult }
-    | { project: ProjectState; outputs: OpenSpecCommandResult[]; repoStatePaths: RepoStatePaths }
+    | {
+      project: ProjectState;
+      outputs: OpenSpecCommandResult[];
+      repoStatePaths: RepoStatePaths;
+      instructionResults: Array<OpenSpecCommandResult<OpenSpecInstructionsResponse>>;
+    }
   > {
     const project = await this.requireActiveProject(channelKey);
     if (!project.repoPath || !project.projectName || !project.changeName) {
@@ -661,6 +669,21 @@ export class ClawSpecService {
       }
       const statusResult = await this.openSpec.status(project.repoPath, project.changeName);
       outputs.push(statusResult);
+      const instructionResults = await this.refreshPlanningInstructionFiles(project, repoStatePaths);
+      outputs.push(...instructionResults);
+      await this.writeLatestSummary(
+        repoStatePaths,
+        `Planning instructions refreshed for ${project.changeName} via OpenSpec CLI.`,
+      );
+      await removeIfExists(repoStatePaths.executionControlFile);
+      await removeIfExists(repoStatePaths.executionResultFile);
+      await removeIfExists(repoStatePaths.workerProgressFile);
+      return {
+        project,
+        outputs,
+        repoStatePaths,
+        instructionResults,
+      };
     } catch (error) {
       if (error instanceof OpenSpecCommandError) {
         return {
@@ -677,15 +700,6 @@ export class ClawSpecService {
       }
       throw error;
     }
-
-    await removeIfExists(repoStatePaths.executionControlFile);
-    await removeIfExists(repoStatePaths.executionResultFile);
-    await removeIfExists(repoStatePaths.workerProgressFile);
-    return {
-      project,
-      outputs,
-      repoStatePaths,
-    };
   }
 
   private async startVisiblePlanningSync(
@@ -717,7 +731,34 @@ export class ClawSpecService {
       lastExecutionAt: startedAt,
     }));
 
-    return await this.buildPlanningSyncInjection(runningProject, userPrompt);
+    return await this.buildPlanningSyncInjection(runningProject, userPrompt, prepared.instructionResults);
+  }
+
+  private async refreshPlanningInstructionFiles(
+    project: ProjectState,
+    repoStatePaths: RepoStatePaths,
+  ): Promise<Array<OpenSpecCommandResult<OpenSpecInstructionsResponse>>> {
+    if (!project.repoPath || !project.changeName) {
+      return [];
+    }
+
+    const artifactIds = ["proposal", "specs", "design", "tasks"] as const;
+    await ensureDir(repoStatePaths.planningInstructionsRoot);
+    const results: Array<OpenSpecCommandResult<OpenSpecInstructionsResponse>> = [];
+
+    for (const artifactId of artifactIds) {
+      const result = await this.openSpec.instructionsArtifact(project.repoPath, artifactId, project.changeName);
+      results.push(result);
+      await writeJsonFile(path.join(repoStatePaths.planningInstructionsRoot, `${artifactId}.json`), {
+        generatedAt: new Date().toISOString(),
+        command: result.command,
+        cwd: result.cwd,
+        durationMs: result.durationMs,
+        instruction: result.parsed,
+      });
+    }
+
+    return results;
   }
 
   private async collectPlanningContextPaths(
@@ -728,6 +769,17 @@ export class ClawSpecService {
       repoStatePaths.stateFile,
       repoStatePaths.planningJournalFile,
     ];
+    const instructionFiles = [
+      path.join(repoStatePaths.planningInstructionsRoot, "proposal.json"),
+      path.join(repoStatePaths.planningInstructionsRoot, "specs.json"),
+      path.join(repoStatePaths.planningInstructionsRoot, "design.json"),
+      path.join(repoStatePaths.planningInstructionsRoot, "tasks.json"),
+    ];
+    for (const instructionFile of instructionFiles) {
+      if (await pathExists(instructionFile)) {
+        paths.push(instructionFile);
+      }
+    }
 
     if (!project.changeDir) {
       return {

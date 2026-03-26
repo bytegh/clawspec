@@ -14,6 +14,7 @@ export type RepoStatePaths = {
   latestSummaryFile: string;
   planningJournalFile: string;
   planningJournalSnapshotFile: string;
+  planningInstructionsRoot: string;
   rollbackManifestFile: string;
   snapshotsRoot: string;
   archivesRoot: string;
@@ -75,6 +76,7 @@ export function getRepoStatePaths(repoPath: string, archiveDirName: string): Rep
     latestSummaryFile: path.join(root, "latest-summary.md"),
     planningJournalFile: path.join(root, "planning-journal.jsonl"),
     planningJournalSnapshotFile: path.join(root, "planning-journal.snapshot.json"),
+    planningInstructionsRoot: path.join(root, "planning-instructions"),
     rollbackManifestFile: path.join(root, "rollback-manifest.json"),
     snapshotsRoot: path.join(root, "snapshots"),
     archivesRoot: path.join(root, archiveDirName),

@@ -156,6 +156,8 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
   const runningProject = await stateStore.getActiveProject(channelKey);
 
   assert.match(injected?.prependContext ?? "", /ClawSpec planning sync is active for this turn/);
+  assert.match(injected?.prependContext ?? "", /Prefetched OpenSpec instructions for this turn/);
+  assert.match(injected?.prependContext ?? "", /planning-instructions[\\/]+proposal\.json/);
   assert.match(injected?.prependContext ?? "", /mandatory final line exactly in this shape/i);
   assert.equal(runningProject?.status, "planning");
   assert.equal(runningProject?.phase, "planning_sync");
