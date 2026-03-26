@@ -67,30 +67,33 @@ test("AcpWorkerClient stops the worker when the gateway process disappears", asy
   });
 
   const startedAt = Date.now();
+  let sawStarted = false;
   const runPromise = client.runTurn({
     sessionKey: "session-watchdog",
     cwd: tempRoot,
     text: "stay alive",
+    onEvent: async (event) => {
+      if (event.type === "text_delta" && event.text?.includes("Working on stay alive")) {
+        sawStarted = true;
+      }
+    },
+  });
+  const observedRunPromise = runPromise.catch((error) => {
+    throw error;
   });
 
   try {
-    await waitFor(async () => {
-      const status = await client.getSessionStatus({
-        sessionKey: "session-watchdog",
-        cwd: tempRoot,
-        agentId: "codex",
-      });
-      return status?.details?.status === "alive";
-    });
+    await waitFor(async () => sawStarted === true);
 
     terminateChildProcess(gateway, { force: true });
 
     await assert.rejects(
-      runPromise,
+      observedRunPromise,
       /acpx exited with code|signal=SIGTERM|terminated/i,
     );
   } finally {
     terminateChildProcess(gateway, { force: true });
+    await observedRunPromise.catch(() => undefined);
   }
 
   assert.ok(Date.now() - startedAt < 4_000, "watchdog should stop the worker quickly");
@@ -242,7 +245,7 @@ async function main() {
     });
     await new Promise((resolve) => setTimeout(resolve, 60));
     await writeJsonLine({ text: "Working on " + text });
-    if (text.includes("stay alive")) {
+    if (sessionName === "session-watchdog" || text.includes("stay alive")) {
       setInterval(() => {}, 1_000);
       return;
     }
