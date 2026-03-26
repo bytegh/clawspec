@@ -1,5 +1,6 @@
 import path from "node:path";
 import { ensureDir, pathExists, readJsonFile, writeJsonFile } from "../utils/fs.ts";
+import { sameNormalizedPath } from "../utils/paths.ts";
 import type { WorkspaceRecord, WorkspaceStateFile } from "../types.ts";
 
 export class WorkspaceStore {
@@ -56,7 +57,7 @@ export class WorkspaceStore {
     await ensureDir(normalized);
     const state = await this.readState();
     const now = new Date().toISOString();
-    const existing = state.workspaces.find((entry) => samePath(entry.path, normalized));
+    const existing = state.workspaces.find((entry) => sameNormalizedPath(entry.path, normalized));
     const nextByChannel = { ...(state.currentWorkspaceByChannel ?? {}) };
     if (channelKey) {
       nextByChannel[channelKey] = normalized;
@@ -67,7 +68,7 @@ export class WorkspaceStore {
       currentWorkspace: normalized,
       currentWorkspaceByChannel: nextByChannel,
       workspaces: [
-        ...state.workspaces.filter((entry) => !samePath(entry.path, normalized)),
+        ...state.workspaces.filter((entry) => !sameNormalizedPath(entry.path, normalized)),
         {
           path: normalized,
           lastUsedAt: now,
@@ -118,7 +119,7 @@ export class WorkspaceStore {
           }))
       : [];
 
-    if (!workspaces.some((entry) => samePath(entry.path, currentWorkspace))) {
+    if (!workspaces.some((entry) => sameNormalizedPath(entry.path, currentWorkspace))) {
       workspaces.push({
         path: currentWorkspace,
         lastUsedAt: new Date().toISOString(),
@@ -136,8 +137,4 @@ export class WorkspaceStore {
   private async writeState(state: WorkspaceStateFile): Promise<void> {
     await writeJsonFile(this.filePath, state);
   }
-}
-
-function samePath(left: string, right: string): boolean {
-  return path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase();
 }

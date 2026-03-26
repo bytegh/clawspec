@@ -113,3 +113,15 @@ export function resolveProjectScopedPath(
 
   return project.repoPath ? path.join(project.repoPath, normalized) : normalized;
 }
+
+export function sameNormalizedPath(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const normalizedLeft = path.normalize(left);
+  const normalizedRight = path.normalize(right);
+  if (process.platform === "win32") {
+    return normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
+  }
+  return normalizedLeft === normalizedRight;
+}

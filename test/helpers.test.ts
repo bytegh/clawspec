@@ -11,6 +11,7 @@ import {
   isMeaningfulExecutionSummary,
   okReply,
   errorReply,
+  samePath,
 } from "../src/orchestrator/helpers.ts";
 
 function makeProject(overrides: Partial<ProjectState> = {}): ProjectState {
@@ -94,4 +95,14 @@ test("okReply and errorReply produce correct shapes", () => {
   const err = errorReply("failure");
   assert.equal(err.text, "failure");
   assert.equal(err.isError, true);
+});
+
+test("samePath respects platform case sensitivity rules", () => {
+  if (process.platform === "win32") {
+    assert.equal(samePath("C:\\Repo\\Demo", "c:\\repo\\demo"), true);
+    return;
+  }
+
+  assert.equal(samePath("/Repo/Demo", "/repo/demo"), false);
+  assert.equal(samePath("/repo/demo", "/repo/demo"), true);
 });

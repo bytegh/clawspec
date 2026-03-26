@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 
 export type ShellCommandResult = {
   code?: number | null;
@@ -15,12 +16,21 @@ export function spawnShellCommand(params: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  const commandLabel = buildShellCommand(params.command, params.args);
-  return spawn(commandLabel, {
+  if (shouldUseShell(params.command)) {
+    const commandLabel = buildShellCommand(params.command, params.args);
+    return spawn(commandLabel, {
+      cwd: params.cwd,
+      env: params.env,
+      shell: true,
+      windowsHide: true,
+    });
+  }
+
+  return spawn(params.command, params.args, {
     cwd: params.cwd,
     env: params.env,
-    shell: true,
-    windowsHide: true,
+    shell: false,
+    detached: true,
   });
 }
 
@@ -34,13 +44,11 @@ export async function runShellCommand(params: {
 }): Promise<ShellCommandResult> {
   return await new Promise((resolve) => {
     const child = spawnShellCommand(params);
+    let timeoutError: Error | undefined;
     const timeout = typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
       ? setTimeout(() => {
-        try {
-          child.kill();
-        } catch {
-          return;
-        }
+        timeoutError = new Error(`${params.command} timed out after ${params.timeoutMs}ms`);
+        terminateChildProcess(child);
       }, params.timeoutMs)
       : undefined;
 
@@ -84,9 +92,73 @@ export async function runShellCommand(params: {
         stderr,
         signal,
         killed: child.killed,
+        error: timeoutError,
       });
     });
   });
+}
+
+export function terminateChildProcess(
+  child: Pick<ChildProcess, "pid" | "killed" | "kill">,
+  options?: { force?: boolean },
+): void {
+  if (child.killed) {
+    return;
+  }
+
+  const force = options?.force === true;
+  const pid = typeof child.pid === "number" && Number.isFinite(child.pid) ? child.pid : undefined;
+  if (process.platform === "win32") {
+    if (pid) {
+      try {
+        const killer = spawn("taskkill", [
+          "/PID",
+          String(pid),
+          "/T",
+          "/F",
+        ], {
+          stdio: "ignore",
+          windowsHide: true,
+          shell: false,
+        });
+        killer.unref();
+      } catch {
+        // Fall back to killing the direct child below.
+      }
+    }
+    try {
+      child.kill();
+    } catch {
+      return;
+    }
+    return;
+  }
+
+  const signal: NodeJS.Signals = force ? "SIGKILL" : "SIGTERM";
+  if (pid && pid > 0) {
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      try {
+        child.kill(signal);
+      } catch {
+        return;
+      }
+    }
+  } else {
+    try {
+      child.kill(signal);
+    } catch {
+      return;
+    }
+  }
+
+  if (!force) {
+    const escalator = setTimeout(() => {
+      terminateChildProcess(child, { force: true });
+    }, 1_000);
+    escalator.unref?.();
+  }
 }
 
 export function isMissingCommandResult(result: ShellCommandResult, command: string): boolean {
@@ -116,6 +188,19 @@ function quoteShellArg(arg: string): string {
     return quoteWindowsShellArg(arg);
   }
   return quotePosixShellArg(arg);
+}
+
+function shouldUseShell(command: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  const extension = path.extname(command).toLowerCase();
+  if (extension === ".exe" || extension === ".com") {
+    return false;
+  }
+
+  return true;
 }
 
 function quoteWindowsShellArg(arg: string): string {

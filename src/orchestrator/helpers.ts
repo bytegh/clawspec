@@ -1,8 +1,8 @@
-import path from "node:path";
 import type { PluginCommandResult } from "openclaw/plugin-sdk";
 import { extractEmbeddedClawSpecKeyword } from "../control/keywords.ts";
 import type { ProjectState, TaskCountSummary } from "../types.ts";
 import { formatTaskCounts } from "../utils/markdown.ts";
+import { sameNormalizedPath } from "../utils/paths.ts";
 
 export function deriveRoutingContext(params: {
   channel?: string;
@@ -209,10 +209,7 @@ export function isProjectContextAttached(project: ProjectState): boolean {
 }
 
 export function samePath(left: string | undefined, right: string | undefined): boolean {
-  if (!left || !right) {
-    return false;
-  }
-  return path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase();
+  return sameNormalizedPath(left, right);
 }
 
 export function isFinishedStatus(status: ProjectState["status"]): boolean {

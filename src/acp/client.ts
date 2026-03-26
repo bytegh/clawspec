@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { PluginLogger } from "openclaw/plugin-sdk";
-import { runShellCommand, spawnShellCommand } from "../utils/shell-command.ts";
+import { runShellCommand, spawnShellCommand, terminateChildProcess } from "../utils/shell-command.ts";
 
 export type AcpWorkerEvent =
   | {
@@ -661,14 +661,7 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<{
 }
 
 function safeKill(child: ChildProcessWithoutNullStreams): void {
-  if (child.killed) {
-    return;
-  }
-  try {
-    child.kill();
-  } catch {
-    return;
-  }
+  terminateChildProcess(child);
 }
 
 function buildPermissionArgs(mode: "approve-all" | "approve-reads" | "deny-all"): string[] {

@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const ATOMIC_WRITE_RETRYABLE_CODES = new Set(["EPERM", "EACCES", "EBUSY", "ENOENT"]);
@@ -40,7 +41,7 @@ export async function tryReadUtf8(filePath: string): Promise<string | undefined>
 
 export async function writeUtf8(filePath: string, content: string): Promise<void> {
   await ensureDir(path.dirname(filePath));
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tempPath, content, "utf8");
   try {
     await renameWithRetry(tempPath, filePath);
@@ -58,8 +59,8 @@ export async function writeUtf8(filePath: string, content: string): Promise<void
 }
 
 export async function appendUtf8(filePath: string, content: string): Promise<void> {
-  const existing = (await tryReadUtf8(filePath)) ?? "";
-  await writeUtf8(filePath, `${existing}${content}`);
+  await ensureDir(path.dirname(filePath));
+  await appendFile(filePath, content, "utf8");
 }
 
 export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
