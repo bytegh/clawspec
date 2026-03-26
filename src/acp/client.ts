@@ -253,8 +253,11 @@ export class AcpWorkerClient {
       if (exit.error) {
         throw exit.error;
       }
+      if (exit.signal && !sawError) {
+        throw new Error(formatAcpxExitMessage(stderr, exit.code, exit.signal));
+      }
       if ((exit.code ?? 0) !== 0 && !sawError) {
-        throw new Error(formatAcpxExitMessage(stderr, exit.code));
+        throw new Error(formatAcpxExitMessage(stderr, exit.code, exit.signal));
       }
       if (!sawDone && !sawError) {
         await params.onEvent?.({ type: "done" });
@@ -727,9 +730,19 @@ function buildPermissionArgs(mode: "approve-all" | "approve-reads" | "deny-all")
   return ["--approve-all"];
 }
 
-function formatAcpxExitMessage(stderr: string, exitCode: number | null | undefined): string {
+function formatAcpxExitMessage(
+  stderr: string,
+  exitCode: number | null | undefined,
+  signal?: NodeJS.Signals | null,
+): string {
   const detail = stderr.trim();
-  return detail || `acpx exited with code ${exitCode ?? "unknown"}`;
+  if (detail) {
+    return detail;
+  }
+  if (signal) {
+    return `acpx terminated by signal ${signal}`;
+  }
+  return `acpx exited with code ${exitCode ?? "unknown"}`;
 }
 
 function asTrimmedString(value: unknown): string {
