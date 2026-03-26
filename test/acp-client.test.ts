@@ -46,6 +46,38 @@ test("AcpWorkerClient tracks active worker lifecycle through acpx CLI", async ()
   assert.match(finalStatus?.summary ?? "", /status=dead/);
 });
 
+test("AcpWorkerClient stops the worker when the gateway process disappears", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-acpx-watchdog-"));
+  const fake = await createFakeAcpx(tempRoot);
+  const missingGatewayPid = process.pid + 1_000_000;
+  const client = new AcpWorkerClient({
+    agentId: "codex",
+    logger: createLogger(),
+    command: fake.command,
+    env: fake.env,
+    gatewayPid: missingGatewayPid,
+    gatewayWatchdogPollMs: 50,
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    client.runTurn({
+      sessionKey: "session-watchdog",
+      cwd: tempRoot,
+      text: "stay alive",
+    }),
+    /acpx exited with code|signal=SIGTERM|terminated/i,
+  );
+
+  assert.ok(Date.now() - startedAt < 4_000, "watchdog should stop the worker quickly");
+  const finalStatus = await client.getSessionStatus({
+    sessionKey: "session-watchdog",
+    cwd: tempRoot,
+    agentId: "codex",
+  });
+  assert.match(finalStatus?.summary ?? "", /status=dead/);
+});
+
 async function createFakeAcpx(tempRoot: string): Promise<{ command: string; env: NodeJS.ProcessEnv }> {
   const scriptPath = path.join(tempRoot, "fake-acpx.js");
   const wrapperPath = path.join(tempRoot, process.platform === "win32" ? "fake-acpx.cmd" : "fake-acpx");
@@ -93,6 +125,18 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+function isAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error && typeof error === "object" && error.code === "EPERM";
+  }
+}
+
 async function writeJsonLine(value) {
   process.stdout.write(JSON.stringify(value) + "\\n");
 }
@@ -122,8 +166,8 @@ async function main() {
 
   async function runningExists() {
     try {
-      await fs.access(runningFile);
-      return true;
+      const payload = JSON.parse(await fs.readFile(runningFile, "utf8"));
+      return isAlive(payload && payload.pid);
     } catch {
       return false;
     }
@@ -167,13 +211,17 @@ async function main() {
 
   if (verb === "prompt") {
     const text = (await readStdin()).trim();
-    await fs.writeFile(runningFile, "running", "utf8");
+    await fs.writeFile(runningFile, JSON.stringify({ pid: process.pid }), "utf8");
     process.on("SIGTERM", async () => {
       await fs.rm(runningFile, { force: true });
       process.exit(143);
     });
     await new Promise((resolve) => setTimeout(resolve, 60));
     await writeJsonLine({ text: "Working on " + text });
+    if (text.includes("stay alive")) {
+      setInterval(() => {}, 1_000);
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 80));
     await fs.rm(runningFile, { force: true });
     await writeJsonLine({ type: "done" });

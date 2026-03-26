@@ -52,6 +52,27 @@ test("ensureAcpxCli uses the global acpx command when available", async () => {
   assert.equal(calls.some((call) => call.command === "npm"), false);
 });
 
+test("ensureAcpxCli accepts a newer global acpx version", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const result = await ensureAcpxCli({
+    pluginRoot: ROOT_PREFIX,
+    runner: async ({ command, args }) => {
+      calls.push({ command, args });
+      if (command === LOCAL_COMMAND) {
+        return { code: 1, stdout: "", stderr: "not found" };
+      }
+      if (command === "acpx") {
+        return { code: 0, stdout: "0.3.2\n", stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected command" };
+    },
+  });
+
+  assert.equal(result.source, "global");
+  assert.equal(result.version, "0.3.2");
+  assert.equal(calls.some((call) => call.command === "npm"), false);
+});
+
 test("ensureAcpxCli prefers the OpenClaw builtin acpx over an incompatible PATH acpx", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const result = await ensureAcpxCli({

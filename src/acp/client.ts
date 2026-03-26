@@ -1,5 +1,5 @@
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { runShellCommand, spawnShellCommand, terminateChildProcess } from "../utils/shell-command.ts";
 
@@ -54,6 +54,8 @@ type AcpWorkerClientOptions = {
   env?: NodeJS.ProcessEnv;
   permissionMode?: "approve-all" | "approve-reads" | "deny-all";
   queueOwnerTtlSeconds?: number;
+  gatewayPid?: number;
+  gatewayWatchdogPollMs?: number;
 };
 
 type EnsureSessionParams = {
@@ -81,6 +83,7 @@ type SessionDescriptor = {
 type ActiveSessionProcess = {
   sessionKey: string;
   child: ChildProcessWithoutNullStreams;
+  watchdog?: ChildProcess;
   cwd: string;
   agentId: string;
   startedAt: string;
@@ -93,6 +96,7 @@ type SessionExitState = {
 
 const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 30;
 const DEFAULT_PERMISSION_MODE = "approve-all";
+const DEFAULT_GATEWAY_WATCHDOG_POLL_MS = 1_000;
 
 export class AcpWorkerClient {
   readonly agentId: string;
@@ -101,6 +105,8 @@ export class AcpWorkerClient {
   readonly env?: NodeJS.ProcessEnv;
   readonly permissionMode: "approve-all" | "approve-reads" | "deny-all";
   readonly queueOwnerTtlSeconds: number;
+  readonly gatewayPid: number;
+  readonly gatewayWatchdogPollMs: number;
   readonly handles = new Map<string, AcpWorkerHandle>();
   readonly sessionDescriptors = new Map<string, SessionDescriptor>();
   readonly activeProcesses = new Map<string, ActiveSessionProcess>();
@@ -113,6 +119,8 @@ export class AcpWorkerClient {
     this.env = options.env;
     this.permissionMode = options.permissionMode ?? DEFAULT_PERMISSION_MODE;
     this.queueOwnerTtlSeconds = options.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS;
+    this.gatewayPid = normalizePid(options.gatewayPid) ?? process.pid;
+    this.gatewayWatchdogPollMs = normalizeWatchdogPollMs(options.gatewayWatchdogPollMs);
   }
 
   async ensureSession(params: EnsureSessionParams): Promise<{
@@ -183,9 +191,11 @@ export class AcpWorkerClient {
     child.stdin.end(params.text);
 
     const startedAt = new Date().toISOString();
+    const watchdog = this.startGatewayWatchdog(params.sessionKey, child);
     this.activeProcesses.set(params.sessionKey, {
       sessionKey: params.sessionKey,
       child,
+      watchdog,
       cwd: descriptor.cwd,
       agentId: descriptor.agentId,
       startedAt,
@@ -251,6 +261,10 @@ export class AcpWorkerClient {
       }
       return ensured;
     } finally {
+      const active = this.activeProcesses.get(params.sessionKey);
+      if (active?.watchdog) {
+        safeKill(active.watchdog);
+      }
       this.activeProcesses.delete(params.sessionKey);
       lines.close();
       if (params.signal) {
@@ -360,6 +374,7 @@ export class AcpWorkerClient {
 
     const active = this.activeProcesses.get(sessionKey);
     if (active) {
+      safeKill(active.watchdog);
       safeKill(active.child);
       this.activeProcesses.delete(sessionKey);
       this.recordSessionExit(sessionKey, active, active.child.pid, null, "SIGTERM", reason);
@@ -385,6 +400,7 @@ export class AcpWorkerClient {
 
     const active = this.activeProcesses.get(sessionKey);
     if (active) {
+      safeKill(active.watchdog);
       safeKill(active.child);
       this.activeProcesses.delete(sessionKey);
       this.recordSessionExit(sessionKey, active, active.child.pid, null, "SIGTERM", reason);
@@ -512,6 +528,40 @@ export class AcpWorkerClient {
     this.logger.debug?.(
       `[clawspec] acpx worker exited: session=${sessionKey} pid=${pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
     );
+  }
+
+  private startGatewayWatchdog(
+    sessionKey: string,
+    child: ChildProcessWithoutNullStreams,
+  ): ChildProcess | undefined {
+    const workerPid = normalizePid(child.pid);
+    if (!workerPid) {
+      return undefined;
+    }
+
+    try {
+      const watchdog = spawn(process.execPath, [
+        "-e",
+        GATEWAY_WATCHDOG_SOURCE,
+        String(this.gatewayPid),
+        String(workerPid),
+        String(this.gatewayWatchdogPollMs),
+      ], {
+        stdio: "ignore",
+        windowsHide: true,
+        detached: true,
+      });
+      watchdog.unref();
+      this.logger.debug?.(
+        `[clawspec] gateway watchdog armed: session=${sessionKey} gatewayPid=${this.gatewayPid} workerPid=${workerPid}`,
+      );
+      return watchdog;
+    } catch (error) {
+      this.logger.warn(
+        `[clawspec] failed to start gateway watchdog for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
   }
 }
 
@@ -660,7 +710,10 @@ async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<{
   });
 }
 
-function safeKill(child: ChildProcessWithoutNullStreams): void {
+function safeKill(child: Pick<ChildProcess, "pid" | "killed" | "kill"> | undefined): void {
+  if (!child) {
+    return;
+  }
   terminateChildProcess(child);
 }
 
@@ -691,3 +744,103 @@ function asOptionalString(value: unknown): string | undefined {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+function normalizePid(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeWatchdogPollMs(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 50) {
+    return DEFAULT_GATEWAY_WATCHDOG_POLL_MS;
+  }
+  return Math.trunc(value);
+}
+
+const GATEWAY_WATCHDOG_SOURCE = String.raw`
+const { spawn } = require("node:child_process");
+
+const gatewayPid = Number(process.argv[1]);
+const workerPid = Number(process.argv[2]);
+const pollMs = Number(process.argv[3]);
+
+function normalizePid(value) {
+  return Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined;
+}
+
+function isAlive(pid) {
+  const normalized = normalizePid(pid);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    process.kill(normalized, 0);
+    return true;
+  } catch (error) {
+    const code = error && typeof error === "object" ? error.code : undefined;
+    return code === "EPERM";
+  }
+}
+
+function killWorkerTree(pid) {
+  const normalized = normalizePid(pid);
+  if (!normalized) {
+    return;
+  }
+  if (process.platform === "win32") {
+    try {
+      const killer = spawn("taskkill", ["/PID", String(normalized), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+        detached: true,
+      });
+      killer.unref();
+    } catch {}
+    return;
+  }
+  try {
+    process.kill(-normalized, "SIGTERM");
+  } catch {
+    try {
+      process.kill(normalized, "SIGTERM");
+    } catch {}
+  }
+  const escalator = setTimeout(() => {
+    try {
+      process.kill(-normalized, "SIGKILL");
+    } catch {
+      try {
+        process.kill(normalized, "SIGKILL");
+      } catch {}
+    }
+  }, 1000);
+  escalator.unref?.();
+}
+
+const safeGatewayPid = normalizePid(gatewayPid);
+const safeWorkerPid = normalizePid(workerPid);
+const safePollMs = Number.isFinite(pollMs) && pollMs >= 50 ? Math.trunc(pollMs) : 1000;
+
+if (!safeGatewayPid || !safeWorkerPid) {
+  process.exit(0);
+}
+
+if (!isAlive(safeWorkerPid)) {
+  process.exit(0);
+}
+
+const timer = setInterval(() => {
+  if (!isAlive(safeWorkerPid)) {
+    clearInterval(timer);
+    process.exit(0);
+    return;
+  }
+  if (!isAlive(safeGatewayPid)) {
+    clearInterval(timer);
+    killWorkerTree(safeWorkerPid);
+    const exitTimer = setTimeout(() => process.exit(0), 250);
+    exitTimer.unref?.();
+  }
+}, safePollMs);
+`;

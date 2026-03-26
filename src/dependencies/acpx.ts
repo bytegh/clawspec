@@ -178,10 +178,10 @@ async function checkAcpxVersion(
       message: "acpx --version did not return a parseable version",
     };
   }
-  if (version !== params.expectedVersion) {
+  if (compareSemver(version, params.expectedVersion) < 0) {
     return {
       ok: false,
-      message: `acpx version mismatch: found ${version}, expected ${params.expectedVersion}`,
+      message: `acpx version too old: found ${version}, require >= ${params.expectedVersion}`,
     };
   }
   return { ok: true, version };
@@ -218,4 +218,78 @@ function getBuiltInAcpxCommand(runtimeEntrypoint: string | undefined): string | 
     ".bin",
     process.platform === "win32" ? "acpx.cmd" : "acpx",
   );
+}
+
+function compareSemver(left: string, right: string): number {
+  const parsedLeft = parseSemver(left);
+  const parsedRight = parseSemver(right);
+  if (!parsedLeft || !parsedRight) {
+    return left.localeCompare(right);
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const delta = parsedLeft.core[index] - parsedRight.core[index];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+
+  const leftPre = parsedLeft.prerelease;
+  const rightPre = parsedRight.prerelease;
+  if (leftPre.length === 0 && rightPre.length === 0) {
+    return 0;
+  }
+  if (leftPre.length === 0) {
+    return 1;
+  }
+  if (rightPre.length === 0) {
+    return -1;
+  }
+
+  const maxLength = Math.max(leftPre.length, rightPre.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftToken = leftPre[index];
+    const rightToken = rightPre[index];
+    if (leftToken === undefined) {
+      return -1;
+    }
+    if (rightToken === undefined) {
+      return 1;
+    }
+    const delta = comparePrereleaseToken(leftToken, rightToken);
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+function parseSemver(value: string): { core: [number, number, number]; prerelease: string[] } | null {
+  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    core: [
+      Number.parseInt(match[1]!, 10),
+      Number.parseInt(match[2]!, 10),
+      Number.parseInt(match[3]!, 10),
+    ],
+    prerelease: match[4] ? match[4].split(".") : [],
+  };
+}
+
+function comparePrereleaseToken(left: string, right: string): number {
+  const leftNumeric = /^\d+$/.test(left);
+  const rightNumeric = /^\d+$/.test(right);
+  if (leftNumeric && rightNumeric) {
+    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
+  }
+  if (leftNumeric) {
+    return -1;
+  }
+  if (rightNumeric) {
+    return 1;
+  }
+  return left.localeCompare(right);
 }
