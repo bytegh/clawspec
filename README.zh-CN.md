@@ -229,13 +229,17 @@ ClawSpec 依赖这几个 OpenClaw hook：
 
 ### 1. 安装插件
 
-本地联动安装示例：
+npm 发布后的标准安装方式：
 
 ```powershell
-openclaw plugins install clawspec@0.1.0
+openclaw plugins install clawspec@latest
 ```
 
-以后如果你把 ClawSpec 打包发布，也可以按普通 OpenClaw 插件的方式安装。下面的说明默认插件已经被 OpenClaw 发现。
+`@latest` 会始终解析到 npm 上最新发布的 ClawSpec 版本。
+
+当前 OpenClaw 一般不接受把 GitHub 仓库 URL 直接当作普通插件安装源。也就是说，单独一个 GitHub repo 还不够，公开安装路径通常还是 npm 包规格，例如 `clawspec@latest`。
+
+如果你要安装一个还没发布到 npm 的提交，请改用本地 checkout 或下载好的 `.tgz` 包安装。
 
 ### 2. 在 OpenClaw 里启用 ACP 和 ACPX
 
@@ -332,7 +336,6 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
 | --- | --- | --- |
 | `defaultWorkspace` | `/clawspec workspace` 和 `/clawspec use` 的默认 workspace | 某个 channel 第一次选定 workspace 后，会优先使用该 channel 自己记住的值 |
 | `workerAgentId` | 后台 worker 默认使用的 ACP agent | 可以被 `/clawspec worker <agent-id>` 在当前 channel/project 覆盖 |
-| `workerBackendId` | 后台 worker session 的可选 ACP backend 覆盖 | 使用标准 `acpx` 时通常不需要设置 |
 | `openSpecTimeoutMs` | 每次 OpenSpec CLI 调用的超时时间 | repo 较大或主机较慢时可以调大 |
 | `watcherPollIntervalMs` | watcher 的后台恢复扫描周期 | 影响恢复检查和进度补发的灵敏度 |
 | `archiveDirName` | `.openclaw/clawspec/` 下归档目录名称 | 除非你要调整归档布局，否则保持默认即可 |
@@ -342,6 +345,7 @@ ClawSpec 可以让后台任务跑在不同的 ACP agent 上，比如 `codex` 或
 
 - `maxAutoContinueTurns`
 - `maxNoProgressTurns`
+- `workerBackendId`
 - `workerWaitTimeoutMs`
 - `subagentLane`
 
@@ -378,6 +382,38 @@ npm install --omit=dev --no-save acpx@0.3.1
 ```
 
 第一次 fallback 安装可能会花一点时间。如果 OpenClaw 已经自带 ACPX，ClawSpec 现在应该直接复用它，而不是再额外安装一份。
+
+### 4.5. CI 与发布自动化
+
+仓库里现在已经有两条 GitHub Actions workflow：
+
+- `.github/workflows/ci.yml`
+  在 `push main`、`pull_request` 和手动触发时运行。
+  使用三平台矩阵：`ubuntu-latest`、`windows-latest`、`macos-latest`。
+  执行 `npm ci`、`npm run check`、`npm test`。
+- `.github/workflows/release.yml`
+  在推送 `v*` tag 时运行。
+  会校验 tag 和 `package.json` 版本一致，然后执行安装、检查、测试、打包、发布 npm，最后创建 GitHub Release。
+
+发布要点：
+
+- release tag 形如 `vX.Y.Z`
+- tag 必须和 `package.json` 里的版本完全一致
+- npm 发布需要配置 npm trusted publishing，或者提供仓库 secret `NPM_TOKEN`
+- GitHub Release 创建使用默认的 GitHub Actions token，不需要额外手工 token
+
+典型发布流程：
+
+```powershell
+# 1. 先更新 package.json 版本号
+git add package.json package-lock.json
+git commit -m "chore: release vX.Y.Z"
+git push origin main
+
+# 2. 再创建并推送同版本 tag
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
 
 ## 快速开始
 

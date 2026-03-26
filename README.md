@@ -227,10 +227,12 @@ If your host disables plugin hooks globally, keyword-based workflow will not wor
 Recommended public install after publishing to npm:
 
 ```powershell
-openclaw plugins install clawspec@0.1.0
+openclaw plugins install clawspec@latest
 ```
 
-Current OpenClaw builds do not accept raw GitHub URLs as ordinary plugin install specs. A GitHub repo by itself is not enough for `openclaw plugins install`; the standard public path is an npm package spec such as `clawspec@0.1.0`.
+`@latest` always resolves to the newest published ClawSpec release on npm.
+
+Current OpenClaw builds do not accept raw GitHub URLs as ordinary plugin install specs. A GitHub repo by itself is not enough for `openclaw plugins install`; the standard public path is an npm package spec such as `clawspec@latest`.
 
 If you want an unreleased commit before npm publish, clone the repository and install from the local checkout or a downloaded `.tgz` archive instead.
 
@@ -329,7 +331,6 @@ Common `plugins.entries.clawspec.config` fields:
 | --- | --- | --- |
 | `defaultWorkspace` | Default base directory used by `/clawspec workspace` and `/clawspec use` | Channel-specific workspace selection overrides this after first use |
 | `workerAgentId` | Default ACP agent used by background workers | Can be overridden per channel/project with `/clawspec worker <agent-id>` |
-| `workerBackendId` | Optional ACP backend override for worker sessions | Normally leave unset when using the standard `acpx` backend |
 | `openSpecTimeoutMs` | Timeout for each OpenSpec CLI invocation | Increase this if your repo or host is slow |
 | `watcherPollIntervalMs` | Background watcher recovery poll interval | Controls how quickly recovery scans and replay checks run |
 | `archiveDirName` | Directory name under `.openclaw/clawspec/` for archived bundles | Keep the default unless you need a different archive layout |
@@ -339,6 +340,7 @@ Backward-compatibility keys still accepted but currently treated as no-ops:
 
 - `maxAutoContinueTurns`
 - `maxNoProgressTurns`
+- `workerBackendId`
 - `workerWaitTimeoutMs`
 - `subagentLane`
 
@@ -375,6 +377,38 @@ npm install --omit=dev --no-save acpx@0.3.1
 ```
 
 That fallback install can take a while on the first run. If OpenClaw already bundles ACPX, ClawSpec should now reuse it instead of reinstalling another copy.
+
+### 4.5. CI and release automation
+
+This repository now includes two GitHub Actions workflows:
+
+- `.github/workflows/ci.yml`
+  Runs on `push` to `main`, `pull_request`, and manual dispatch.
+  Uses a three-platform matrix: `ubuntu-latest`, `windows-latest`, `macos-latest`.
+  Runs `npm ci`, `npm run check`, and `npm test`.
+- `.github/workflows/release.yml`
+  Runs on tag pushes that match `v*`.
+  Verifies the tag matches `package.json` version, runs install/check/test/pack, publishes to npm, then creates a GitHub Release.
+
+Release notes:
+
+- The release workflow expects tags in the form `vX.Y.Z`.
+- The tag must match the `package.json` version exactly.
+- npm publishing requires either npm trusted publishing or an `NPM_TOKEN` repository secret.
+- GitHub Release creation uses the default GitHub Actions token and does not require an extra manual token.
+
+Typical release flow:
+
+```powershell
+# 1. bump package.json version
+git add package.json package-lock.json
+git commit -m "chore: release vX.Y.Z"
+git push origin main
+
+# 2. create and push a matching tag
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
 
 ## Quick Start
 
