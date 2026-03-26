@@ -168,6 +168,8 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
   assert.match(injected?.prependContext ?? "", /openspec instructions proposal --change demo-change --json/);
   assert.match(injected?.prependContext ?? "", /planning-instructions[\\/]+proposal\.json/);
   assert.deepEqual(instructionCalls, ["proposal", "specs", "design", "tasks"]);
+  assert.match(injected?.prependContext ?? "", /allowed planning scope is limited/i);
+  assert.match(injected?.prependContext ?? "", /Do not invent endpoints, features, constraints, files, acceptance criteria, test scenarios, or architecture details/i);
   assert.match(injected?.prependContext ?? "", /mandatory final line exactly in this shape/i);
   assert.equal(runningProject?.status, "planning");
   assert.equal(runningProject?.phase, "planning_sync");
