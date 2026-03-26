@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { ensureOpenSpecCli, OPENSPEC_PACKAGE_NAME } from "../src/dependencies/openspec.ts";
 
+const ROOT_PREFIX = process.platform === "win32" ? "C:\\clawspec-test" : "/tmp/clawspec-test";
+
 const LOCAL_COMMAND = path.join(
-  "C:\\plugin-root",
+  ROOT_PREFIX,
   "node_modules",
   ".bin",
   process.platform === "win32" ? "openspec.cmd" : "openspec",
@@ -13,7 +15,7 @@ const LOCAL_COMMAND = path.join(
 test("ensureOpenSpecCli uses the global openspec command when available", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const result = await ensureOpenSpecCli({
-    pluginRoot: "C:\\plugin-root",
+    pluginRoot: ROOT_PREFIX,
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {
@@ -36,7 +38,7 @@ test("ensureOpenSpecCli installs a plugin-local openspec when none is available"
   let localCheckCount = 0;
 
   const result = await ensureOpenSpecCli({
-    pluginRoot: "C:\\plugin-root",
+    pluginRoot: ROOT_PREFIX,
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {

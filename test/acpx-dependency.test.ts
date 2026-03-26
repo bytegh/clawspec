@@ -8,10 +8,7 @@ import {
 } from "../src/dependencies/acpx.ts";
 
 const ROOT_PREFIX = process.platform === "win32" ? "C:\\clawspec-test" : "/tmp/clawspec-test";
-const OPENCLAW_PREFIX =
-  process.platform === "win32"
-    ? "C:\\Users\\Administrator\\AppData\\Roaming\\npm\\node_modules\\openclaw"
-    : "/opt/openclaw";
+const OPENCLAW_PREFIX = process.platform === "win32" ? "C:\\openclaw-test" : "/opt/openclaw";
 
 const LOCAL_COMMAND = path.join(
   ROOT_PREFIX,
