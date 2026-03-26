@@ -25,6 +25,7 @@ await withFileLock(lockPath, async () => {
   let childOutput = "";
   let childError = "";
   let child: ReturnType<typeof spawn> | undefined;
+  let childExit: Promise<number | null> | undefined;
 
   t.after(() => {
     if (child && !child.killed) {
@@ -41,6 +42,7 @@ await withFileLock(lockPath, async () => {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    childExit = waitForChildClose(child);
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
@@ -55,9 +57,7 @@ await withFileLock(lockPath, async () => {
   });
 
   await waitFor(() => childOutput.includes("acquired"));
-  const exitCode = await new Promise<number | null>((resolve) => {
-    child?.once("close", (code) => resolve(code));
-  });
+  const exitCode = await childExit;
 
   assert.equal(exitCode, 0, childError || undefined);
 });
@@ -75,4 +75,14 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
     await delay(25);
   }
   throw new Error("timed out waiting for lock handoff");
+}
+
+function waitForChildClose(child: ReturnType<typeof spawn>): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
+
+  return new Promise<number | null>((resolve) => {
+    child.once("close", (code) => resolve(code));
+  });
 }
