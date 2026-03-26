@@ -133,7 +133,7 @@ test("apply reports no new planning notes when the chat context is detached", as
 
 test("cs-plan runs visible planning sync and writes a fresh snapshot", async () => {
   const harness = await createServiceHarness("clawspec-visible-plan-");
-  const { service, stateStore, repoPath } = harness;
+  const { service, stateStore, repoPath, openSpec } = harness;
   const channelKey = "discord:visible-plan:default:main";
   const promptContext = {
     trigger: "user",
@@ -149,6 +149,13 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
   await service.proposalProject(channelKey, "demo-change Demo change");
   await service.recordPlanningMessageFromContext(promptContext, "add another API endpoint");
 
+  const instructionCalls: string[] = [];
+  const originalInstructionsArtifact = openSpec.instructionsArtifact;
+  openSpec.instructionsArtifact = async (...args: unknown[]) => {
+    instructionCalls.push(String(args[1]));
+    return await originalInstructionsArtifact(...args);
+  };
+
   const injected = await service.handleBeforePromptBuild(
     { prompt: "cs-plan", messages: [] },
     promptContext,
@@ -157,7 +164,10 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
 
   assert.match(injected?.prependContext ?? "", /ClawSpec planning sync is active for this turn/);
   assert.match(injected?.prependContext ?? "", /Prefetched OpenSpec instructions for this turn/);
+  assert.match(injected?.prependContext ?? "", /OpenSpec commands already executed by the plugin before this turn/);
+  assert.match(injected?.prependContext ?? "", /openspec instructions proposal --change demo-change --json/);
   assert.match(injected?.prependContext ?? "", /planning-instructions[\\/]+proposal\.json/);
+  assert.deepEqual(instructionCalls, ["proposal", "specs", "design", "tasks"]);
   assert.match(injected?.prependContext ?? "", /mandatory final line exactly in this shape/i);
   assert.equal(runningProject?.status, "planning");
   assert.equal(runningProject?.phase, "planning_sync");

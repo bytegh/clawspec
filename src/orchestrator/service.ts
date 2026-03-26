@@ -587,6 +587,7 @@ export class ClawSpecService {
         scaffoldOnly: planningContext.scaffoldOnly,
         mode: "sync",
         prefetchedInstructions: instructionResults.map((result) => result.parsed!).filter(Boolean),
+        prefetchedInstructionCommands: instructionResults.map((result) => result.command).filter(Boolean),
       }),
     };
   }

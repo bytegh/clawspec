@@ -179,6 +179,7 @@ export function buildPlanningPrependContext(params: {
   mode: "discussion" | "sync";
   nextActionHint?: "plan" | "work";
   prefetchedInstructions?: OpenSpecInstructionsResponse[];
+  prefetchedInstructionCommands?: string[];
 }): string {
   const project = params.project;
 
@@ -198,6 +199,7 @@ export function buildPlanningPrependContext(params: {
         "10. Stop after planning artifacts are refreshed and apply-ready. Do not implement code in this turn.",
         "11. End with a concise summary and a mandatory final line exactly in this shape: `Next: run `cs-work` to start implementation.`",
         "12. Never scan sibling directories under `openspec/changes`, never switch to another change, and never restore or rewrite unrelated files.",
+        "13. Do not claim that OpenSpec instructions were skipped in this sync turn. The plugin already executed those commands before this turn began.",
       ]
     : [
         "Discussion rules for this turn:",
@@ -243,6 +245,15 @@ export function buildPlanningPrependContext(params: {
           `- ${instruction.artifactId}: ${displayPath(resolveProjectScopedPath(project, instruction.outputPath))}`,
         )
       : []),
+    ...(params.mode === "sync"
+      ? (params.prefetchedInstructions ?? []).flatMap((instruction) => [
+        "",
+        formatPrefetchedInstructionBlock(project, instruction),
+      ])
+      : []),
+    params.mode === "sync" ? "" : "",
+    params.mode === "sync" ? "OpenSpec commands already executed by the plugin before this turn:" : "",
+    ...(params.mode === "sync" ? (params.prefetchedInstructionCommands ?? []).map((command) => `- ${command}`) : []),
     params.scaffoldOnly ? "" : "",
     params.scaffoldOnly ? "Only the change scaffold exists right now. That is expected before planning sync generates the first artifacts." : "",
     "",
@@ -502,4 +513,18 @@ function relativeChangeFile(project: ProjectState, targetPath: string): string {
 
 function displayPath(targetPath: string): string {
   return targetPath.split(path.sep).join("/");
+}
+
+function formatPrefetchedInstructionBlock(
+  project: ProjectState,
+  instruction: OpenSpecInstructionsResponse,
+): string {
+  const outputPath = displayPath(resolveProjectScopedPath(project, instruction.outputPath));
+  return [
+    `Artifact ${instruction.artifactId} (output: ${outputPath})`,
+    "Instruction:",
+    fence(instruction.instruction || "(empty)", "markdown"),
+    "Template:",
+    fence(instruction.template || "(empty)", "markdown"),
+  ].join("\n");
 }
