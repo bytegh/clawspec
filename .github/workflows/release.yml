@@ -65,8 +65,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,14 +80,7 @@ jobs:
         run: npm ci
 
       - name: Publish to npm with trusted publishing
-        if: ${{ env.NPM_TOKEN == '' }}
         run: npm publish --access public
-
-      - name: Publish to npm with NPM token
-        if: ${{ env.NPM_TOKEN != '' }}
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
 
   create_release:
     name: Create GitHub release
