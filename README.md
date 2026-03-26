@@ -224,15 +224,28 @@ If your host disables plugin hooks globally, keyword-based workflow will not wor
 
 ### 1. Install the plugin
 
-Recommended public install after publishing to npm:
+You can install ClawSpec in three common ways:
+
+Option A: OpenClaw plugin installer (recommended)
 
 ```powershell
 openclaw plugins install clawspec@latest
 ```
 
-`@latest` always resolves to the newest published ClawSpec release on npm.
+Option B: ClawHub CLI installer
 
-Current OpenClaw builds do not accept raw GitHub URLs as ordinary plugin install specs. A GitHub repo by itself is not enough for `openclaw plugins install`; the standard public path is an npm package spec such as `clawspec@latest`.
+```powershell
+npx clawhub@latest install clawspec
+```
+
+Option C: npm package tarball (manual fallback)
+
+```powershell
+$pkg = npm pack clawspec@latest
+openclaw plugins install $pkg
+```
+
+`@latest` always resolves to the newest published ClawSpec release on npm.
 
 If you want an unreleased commit before npm publish, clone the repository and install from the local checkout or a downloaded `.tgz` archive instead.
 

@@ -229,15 +229,28 @@ ClawSpec 依赖这几个 OpenClaw hook：
 
 ### 1. 安装插件
 
-npm 发布后的标准安装方式：
+常见安装方式有三种：
+
+方式 A：通过 OpenClaw 插件安装器（推荐）
 
 ```powershell
 openclaw plugins install clawspec@latest
 ```
 
-`@latest` 会始终解析到 npm 上最新发布的 ClawSpec 版本。
+方式 B：通过 ClawHub CLI 安装
 
-当前 OpenClaw 一般不接受把 GitHub 仓库 URL 直接当作普通插件安装源。也就是说，单独一个 GitHub repo 还不够，公开安装路径通常还是 npm 包规格，例如 `clawspec@latest`。
+```powershell
+npx clawhub@latest install clawspec
+```
+
+方式 C：通过 npm 包手工安装（兜底）
+
+```powershell
+$pkg = npm pack clawspec@latest
+openclaw plugins install $pkg
+```
+
+`@latest` 会始终解析到 npm 上最新发布的 ClawSpec 版本。
 
 如果你要安装一个还没发布到 npm 的提交，请改用本地 checkout 或下载好的 `.tgz` 包安装。
 
