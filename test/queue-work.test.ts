@@ -65,6 +65,64 @@ test("work queues background implementation", async () => {
   assert.deepEqual(watcherManager.wakeCalls, [channelKey]);
 });
 
+test("before_dispatch intercepts cs-work and queues background implementation directly", async () => {
+  const harness = await createServiceHarness("clawspec-work-dispatch-");
+  const { service, stateStore, watcherManager, repoPath, workspacePath, changeDir } = harness;
+  const channelKey = "discord:work-dispatch:default:main";
+  const tasksPath = path.join(changeDir, "tasks.md");
+  await writeUtf8(tasksPath, "- [ ] 1.1 Build the demo endpoint\n");
+
+  harness.openSpec.instructionsApply = async (cwd: string, changeName: string) => ({
+    command: `openspec instructions apply --change ${changeName} --json`,
+    cwd,
+    stdout: "{}",
+    stderr: "",
+    durationMs: 1,
+    parsed: {
+      changeName,
+      changeDir,
+      schemaName: "spec-driven",
+      contextFiles: { tasks: tasksPath },
+      progress: { total: 1, complete: 0, remaining: 1 },
+      tasks: [{ id: "1.1", description: "Build the demo endpoint", done: false }],
+      state: "ready",
+      instruction: "Implement the remaining task.",
+    },
+  });
+
+  await seedPlanningProject(stateStore, channelKey, {
+    workspacePath,
+    repoPath,
+    projectName: "demo-app",
+    changeName: "queue-work",
+    changeDir,
+    phase: "tasks",
+    status: "ready",
+    planningDirty: false,
+  });
+  await stateStore.updateProject(channelKey, (current) => ({
+    ...current,
+    boundSessionKey: "agent:main:discord:channel:work-dispatch",
+  }));
+
+  const result = await service.handleBeforeDispatch(
+    { content: "cs-work", channel: "discord" },
+    {
+      channelId: "work-dispatch",
+      accountId: "default",
+      conversationId: "main",
+      sessionKey: "agent:main:discord:channel:work-dispatch",
+    },
+  );
+  const project = await stateStore.getActiveProject(channelKey);
+
+  assert.equal(result?.handled, true);
+  assert.match(result?.text ?? "", /Execution Queued/);
+  assert.equal(project?.status, "armed");
+  assert.equal(project?.execution?.action, "work");
+  assert.deepEqual(watcherManager.wakeCalls, [channelKey]);
+});
+
 test("main chat agent end does not clear a background worker run", async () => {
   const harness = await createServiceHarness("clawspec-work-session-");
   const { service, stateStore, repoPath, workspacePath, changeDir } = harness;

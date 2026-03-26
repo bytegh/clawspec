@@ -72,6 +72,7 @@ export async function createServiceHarness(prefix: string): Promise<{
   memoryStore: ProjectMemoryStore;
   workspaceStore: WorkspaceStore;
   watcherManager: FakeWatcherManager;
+  sentMessages: Array<{ to: string; text: string }>;
   workspacePath: string;
   repoPath: string;
   changeDir: string;
@@ -174,6 +175,7 @@ export async function createServiceHarness(prefix: string): Promise<{
   } as Record<string, any>;
 
   const watcherManager = createFakeWatcherManager();
+  const sentMessages: Array<{ to: string; text: string }> = [];
   const service = new ClawSpecService({
     api: {
       config: {
@@ -187,6 +189,18 @@ export async function createServiceHarness(prefix: string): Promise<{
             { id: "codex" },
             { id: "piper" },
           ],
+        },
+      },
+      runtime: {
+        channel: {
+          discord: {
+            sendMessageDiscord: async (to: string, text: string) => {
+              sentMessages.push({ to, text });
+            },
+          },
+          telegram: {},
+          slack: {},
+          signal: {},
         },
       },
       logger: createLogger(),
@@ -221,6 +235,7 @@ export async function createServiceHarness(prefix: string): Promise<{
     memoryStore,
     workspaceStore,
     watcherManager,
+    sentMessages,
     workspacePath,
     repoPath,
     changeDir,

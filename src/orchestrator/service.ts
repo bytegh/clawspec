@@ -125,6 +125,14 @@ type PromptBuildContext = {
   conversationId?: string;
 };
 
+type DispatchContext = {
+  sessionKey?: string;
+  channel?: string;
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
 type AgentEndEvent = {
   messages: unknown[];
   success: boolean;
@@ -277,6 +285,28 @@ export class ClawSpecService {
     return await this.buildPlanningDiscussionInjection(boundProject, event.prompt);
   }
 
+  async handleBeforeDispatch(
+    event: { content: string; channel?: string },
+    ctx: DispatchContext,
+  ): Promise<{ handled: boolean; text?: string } | void> {
+    const keyword = extractEmbeddedClawSpecKeyword(event.content);
+    if (!keyword || keyword.kind === "plan") {
+      return;
+    }
+
+    const result = await this.executeDirectKeyword(keyword, {
+      channel: event.channel,
+      channelId: ctx.channelId,
+      accountId: ctx.accountId,
+      conversationId: ctx.conversationId,
+      sessionKey: ctx.sessionKey,
+    });
+    return {
+      handled: true,
+      text: result.text ?? "",
+    };
+  }
+
   private async handleKeywordPrompt(
     keyword: ClawSpecKeywordIntent,
     event: PromptBuildEvent,
@@ -300,76 +330,87 @@ export class ClawSpecService {
       }
       case "work":
       case "continue": {
-        if (!match?.project.repoPath || !match.project.changeName) {
-          return this.buildPluginReplyInjection(
-            event.prompt,
-            "Select a project and create a change first with `/clawspec use <project-name>` and `/clawspec proposal <change-name> [description]`.",
-          );
-        }
-        if (["archived", "cancelled"].includes(match.project.status)) {
-          return this.buildPluginReplyInjection(
-            event.prompt,
-            `Change \`${match.project.changeName}\` is no longer active. Create a new proposal before starting implementation again.`,
-          );
-        }
-        if (match.project.status === "planning" || match.project.execution?.action === "plan") {
-          return this.buildPluginReplyInjection(
-            event.prompt,
-            `Planning sync for \`${match.project.changeName}\` is still running. Wait for it to finish before starting implementation.`,
-          );
-        }
-        if (keyword.kind === "work" && requiresPlanningSync(match.project)) {
-          return this.buildPluginReplyInjection(
-            event.prompt,
-            buildPlanningRequiredMessage(match.project),
-          );
-        }
-        if (match.project.execution?.state === "running" || match.project.status === "running") {
-          return this.buildPluginReplyInjection(
-            event.prompt,
-            `Background execution for \`${match.project.changeName}\` is already running.`,
-          );
-        }
-        const result = keyword.kind === "continue"
-          ? await this.continueProject(match.channelKey)
-          : await this.queueWorkProject(match.channelKey, "apply");
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
       case "attach": {
-        if (!match) {
-          return this.buildPluginReplyInjection(event.prompt, "No active ClawSpec project is bound to this chat.");
-        }
-        const result = await this.attachProject(match.channelKey, ctx.sessionKey);
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
       case "detach": {
-        if (!match) {
-          return this.buildPluginReplyInjection(event.prompt, "No active ClawSpec project is bound to this chat.");
-        }
-        const result = await this.detachProject(match.channelKey);
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
       case "pause": {
-        if (!match) {
-          return this.buildPluginReplyInjection(event.prompt, "No active ClawSpec project is bound to this chat.");
-        }
-        const result = await this.pauseProject(match.channelKey);
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
       case "status": {
-        if (!match) {
-          return this.buildPluginReplyInjection(event.prompt, "No active ClawSpec project is bound to this chat.");
-        }
-        const result = await this.projectStatus(match.channelKey);
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
       case "cancel": {
-        if (!match) {
-          return this.buildPluginReplyInjection(event.prompt, "No active ClawSpec project is bound to this chat.");
-        }
-        const result = await this.cancelProject(match.channelKey);
+        const result = await this.executeDirectKeyword(keyword, ctx);
         return this.buildPluginReplyInjection(event.prompt, result.text ?? "");
       }
+    }
+  }
+
+  private async executeDirectKeyword(
+    keyword: ClawSpecKeywordIntent,
+    ctx: DispatchContext,
+  ): Promise<PluginCommandResult> {
+    const match = await this.resolveControlProjectForPromptContext(ctx);
+
+    switch (keyword.kind) {
+      case "work":
+      case "continue": {
+        if (!match?.project.repoPath || !match.project.changeName) {
+          return errorReply("Select a project and create a change first with `/clawspec use <project-name>` and `/clawspec proposal <change-name> [description]`.");
+        }
+        if (["archived", "cancelled"].includes(match.project.status)) {
+          return errorReply(`Change \`${match.project.changeName}\` is no longer active. Create a new proposal before starting implementation again.`);
+        }
+        if (match.project.status === "planning" || match.project.execution?.action === "plan") {
+          return errorReply(`Planning sync for \`${match.project.changeName}\` is still running. Wait for it to finish before starting implementation.`);
+        }
+        if (keyword.kind === "work" && requiresPlanningSync(match.project)) {
+          return errorReply(buildPlanningRequiredMessage(match.project));
+        }
+        if (match.project.execution?.state === "running" || match.project.status === "running") {
+          return okReply(`Background execution for \`${match.project.changeName}\` is already running.`);
+        }
+        return keyword.kind === "continue"
+          ? await this.continueProject(match.channelKey)
+          : await this.queueWorkProject(match.channelKey, "apply");
+      }
+      case "attach":
+        if (!match) {
+          return errorReply("No active ClawSpec project is bound to this chat.");
+        }
+        return await this.attachProject(match.channelKey, ctx.sessionKey);
+      case "detach":
+        if (!match) {
+          return errorReply("No active ClawSpec project is bound to this chat.");
+        }
+        return await this.detachProject(match.channelKey);
+      case "pause":
+        if (!match) {
+          return errorReply("No active ClawSpec project is bound to this chat.");
+        }
+        return await this.pauseProject(match.channelKey);
+      case "status":
+        if (!match) {
+          return errorReply("No active ClawSpec project is bound to this chat.");
+        }
+        return await this.projectStatus(match.channelKey);
+      case "cancel":
+        if (!match) {
+          return errorReply("No active ClawSpec project is bound to this chat.");
+        }
+        return await this.cancelProject(match.channelKey);
+      case "plan":
+        return errorReply("`cs-plan` must run through the visible planning turn.");
     }
   }
 
@@ -750,13 +791,19 @@ export class ClawSpecService {
     for (const artifactId of artifactIds) {
       const result = await this.openSpec.instructionsArtifact(project.repoPath, artifactId, project.changeName);
       results.push(result);
-      await writeJsonFile(path.join(repoStatePaths.planningInstructionsRoot, `${artifactId}.json`), {
+      const instructionFile = path.join(repoStatePaths.planningInstructionsRoot, `${artifactId}.json`);
+      await writeJsonFile(instructionFile, {
         generatedAt: new Date().toISOString(),
         command: result.command,
         cwd: result.cwd,
         durationMs: result.durationMs,
         instruction: result.parsed,
       });
+      const relativeInstructionFile = normalizeSlashes(path.relative(project.repoPath, instructionFile) || instructionFile);
+      await this.sendChannelUpdate(
+        project.channelKey,
+        `\`${result.command}\` done. Wrote \`${relativeInstructionFile}\`.`,
+      );
     }
 
     return results;

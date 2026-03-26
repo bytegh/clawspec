@@ -133,7 +133,7 @@ test("apply reports no new planning notes when the chat context is detached", as
 
 test("cs-plan runs visible planning sync and writes a fresh snapshot", async () => {
   const harness = await createServiceHarness("clawspec-visible-plan-");
-  const { service, stateStore, repoPath, openSpec } = harness;
+  const { service, stateStore, repoPath, openSpec, sentMessages } = harness;
   const channelKey = "discord:visible-plan:default:main";
   const promptContext = {
     trigger: "user",
@@ -171,6 +171,23 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
   assert.match(injected?.prependContext ?? "", /mandatory final line exactly in this shape/i);
   assert.equal(runningProject?.status, "planning");
   assert.equal(runningProject?.phase, "planning_sync");
+  assert.deepEqual(
+    sentMessages.map((entry) => entry.to),
+    [
+      "channel:visible-plan",
+      "channel:visible-plan",
+      "channel:visible-plan",
+      "channel:visible-plan",
+    ],
+  );
+  assert.match(sentMessages[0]?.text ?? "", /openspec instructions proposal --change demo-change --json/);
+  assert.match(sentMessages[0]?.text ?? "", /planning-instructions\/proposal\.json/);
+  assert.match(sentMessages[1]?.text ?? "", /openspec instructions specs --change demo-change --json/);
+  assert.match(sentMessages[1]?.text ?? "", /planning-instructions\/specs\.json/);
+  assert.match(sentMessages[2]?.text ?? "", /openspec instructions design --change demo-change --json/);
+  assert.match(sentMessages[2]?.text ?? "", /planning-instructions\/design\.json/);
+  assert.match(sentMessages[3]?.text ?? "", /openspec instructions tasks --change demo-change --json/);
+  assert.match(sentMessages[3]?.text ?? "", /planning-instructions\/tasks\.json/);
 
   await service.handleAgentEnd(
     { messages: [], success: true, durationMs: 10 },

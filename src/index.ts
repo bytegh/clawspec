@@ -188,6 +188,14 @@ const plugin = {
       }, event.content);
     });
 
+    api.on("before_dispatch", async (event, ctx) => {
+      await stateStore.initialize();
+      if (!service) {
+        return;
+      }
+      return await service.handleBeforeDispatch(event, ctx);
+    });
+
     api.on("before_prompt_build", async (event, ctx) => {
       await stateStore.initialize();
       if (!service) {
