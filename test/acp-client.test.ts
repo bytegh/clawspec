@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { AcpWorkerClient } from "../src/acp/client.ts";
+import { terminateChildProcess } from "../src/utils/shell-command.ts";
 
 test("AcpWorkerClient tracks active worker lifecycle through acpx CLI", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-acpx-client-"));
@@ -49,25 +51,47 @@ test("AcpWorkerClient tracks active worker lifecycle through acpx CLI", async ()
 test("AcpWorkerClient stops the worker when the gateway process disappears", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-acpx-watchdog-"));
   const fake = await createFakeAcpx(tempRoot);
-  const missingGatewayPid = process.pid + 1_000_000;
+  const gateway = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+    detached: true,
+  });
+  gateway.unref();
   const client = new AcpWorkerClient({
     agentId: "codex",
     logger: createLogger(),
     command: fake.command,
     env: fake.env,
-    gatewayPid: missingGatewayPid,
+    gatewayPid: gateway.pid,
     gatewayWatchdogPollMs: 50,
   });
 
   const startedAt = Date.now();
-  await assert.rejects(
-    client.runTurn({
-      sessionKey: "session-watchdog",
-      cwd: tempRoot,
-      text: "stay alive",
-    }),
-    /acpx exited with code|signal=SIGTERM|terminated/i,
-  );
+  const runPromise = client.runTurn({
+    sessionKey: "session-watchdog",
+    cwd: tempRoot,
+    text: "stay alive",
+  });
+
+  try {
+    await waitFor(async () => {
+      const status = await client.getSessionStatus({
+        sessionKey: "session-watchdog",
+        cwd: tempRoot,
+        agentId: "codex",
+      });
+      return status?.details?.status === "alive";
+    });
+
+    terminateChildProcess(gateway, { force: true });
+
+    await assert.rejects(
+      runPromise,
+      /acpx exited with code|signal=SIGTERM|terminated/i,
+    );
+  } finally {
+    terminateChildProcess(gateway, { force: true });
+  }
 
   assert.ok(Date.now() - startedAt < 4_000, "watchdog should stop the worker quickly");
   const finalStatus = await client.getSessionStatus({
