@@ -193,7 +193,7 @@ export function buildPlanningPrependContext(params: {
         "7. Before updating each artifact, post a short chat update naming the artifact you are about to refresh.",
         "8. After updating each artifact, post a short chat update describing what changed and what artifact comes next.",
         "9. Stop after planning artifacts are refreshed and apply-ready. Do not implement code in this turn.",
-        "10. End with a concise summary of what changed, what remains open, and tell the user to say `cs-work` when they want implementation to start.",
+        "10. End with a concise summary and a mandatory final line exactly in this shape: `Next: run `cs-work` to start implementation.`",
         "11. Never scan sibling directories under `openspec/changes`, never switch to another change, and never restore or rewrite unrelated files.",
       ]
     : [

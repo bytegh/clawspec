@@ -134,3 +134,35 @@ test("assistant discussion replies are not journaled after the chat is detached"
 
   assert.equal(entries.length, 0);
 });
+
+test("inbound bot/system messages are ignored by planning journal capture", async () => {
+  const harness = await createServiceHarness("clawspec-ignore-bot-inbound-");
+  const { service, stateStore, repoPath } = harness;
+  const channelKey = "discord:ignore-bot-inbound:default:main";
+  const promptContext = createPromptContext("ignore-bot-inbound");
+
+  await service.startProject(channelKey);
+  await service.useProject(channelKey, "demo-app");
+  await service.proposalProject(channelKey, "demo-change Demo change");
+
+  await service.recordPlanningMessageFromContext(
+    {
+      ...promptContext,
+      from: "assistant",
+      metadata: {
+        role: "assistant",
+        fromSelf: true,
+      },
+    },
+    "Planning ready. Next: run `cs-work` to start implementation.",
+  );
+
+  const repoStatePaths = getRepoStatePaths(repoPath, "archives");
+  const journalStore = new PlanningJournalStore(repoStatePaths.planningJournalFile);
+  const entries = await journalStore.list("demo-change");
+  const project = await stateStore.getActiveProject(channelKey);
+
+  assert.equal(entries.length, 0);
+  assert.equal(project?.planningJournal?.dirty, false);
+  assert.equal(project?.planningJournal?.entryCount, 0);
+});

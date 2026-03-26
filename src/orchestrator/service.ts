@@ -28,7 +28,11 @@ import type {
   TaskCountSummary,
 } from "../types.ts";
 import { splitSubcommand, tokenizeArgs } from "../utils/args.ts";
-import { buildChannelKeyFromCommand, buildLegacyChannelKeyFromCommand } from "../utils/channel-key.ts";
+import {
+  buildChannelKeyFromCommand,
+  buildLegacyChannelKeyFromCommand,
+  parseChannelKey,
+} from "../utils/channel-key.ts";
 import {
   appendUtf8,
   directoryExists,
@@ -955,7 +959,11 @@ export class ClawSpecService {
   async workspaceProject(channelKey: string, rawArgs: string): Promise<PluginCommandResult> {
     const currentWorkspace = await this.workspaceStore.getCurrentWorkspace(channelKey);
     const project = await this.ensureSessionProject(channelKey, currentWorkspace);
-    const requested = rawArgs.trim();
+    const parsedArg = this.parseSinglePathArgument(rawArgs, "Usage: `/clawspec workspace <path>`.\nIf the path contains spaces, wrap it in quotes.");
+    if ("error" in parsedArg) {
+      return errorReply(parsedArg.error);
+    }
+    const requested = parsedArg.value;
 
     if (!requested) {
       return okReply(await this.buildWorkspaceText(project));
@@ -1003,7 +1011,11 @@ export class ClawSpecService {
   async useProject(channelKey: string, rawArgs: string): Promise<PluginCommandResult> {
     const workspacePath = await this.workspaceStore.getCurrentWorkspace(channelKey);
     const project = await this.ensureSessionProject(channelKey, workspacePath);
-    const input = rawArgs.trim();
+    const parsedArg = this.parseSinglePathArgument(rawArgs, "Usage: `/clawspec use <project-name>`.\nIf the project path contains spaces, wrap it in quotes.");
+    if ("error" in parsedArg) {
+      return errorReply(parsedArg.error);
+    }
+    const input = parsedArg.value;
 
     if (!input) {
       return okReply(await this.buildWorkspaceText(project));
@@ -1854,6 +1866,7 @@ export class ClawSpecService {
     channelId?: string;
     accountId?: string;
     conversationId?: string;
+    from?: string;
     metadata?: Record<string, unknown>;
   }, text: string): boolean {
     const normalized = sanitizePlanningMessageText(text).trim();
@@ -1862,6 +1875,10 @@ export class ClawSpecService {
     }
 
     const metadata = params.metadata;
+    const normalizedFrom = params.from?.trim().toLowerCase();
+    if (normalizedFrom && ["assistant", "bot", "system", "plugin", "agent", "tool", "worker"].includes(normalizedFrom)) {
+      return true;
+    }
     const selfFlags = [
       metadata?.fromSelf,
       metadata?.isSelf,
@@ -1871,6 +1888,20 @@ export class ClawSpecService {
       metadata?.bot,
     ];
     if (selfFlags.some((value) => value === true)) {
+      return true;
+    }
+
+    const metadataRoles = [
+      metadata?.role,
+      metadata?.senderRole,
+      metadata?.authorRole,
+      metadata?.messageRole,
+      metadata?.sourceRole,
+      metadata?.actorRole,
+    ]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim().toLowerCase());
+    if (metadataRoles.some((value) => ["assistant", "bot", "system", "plugin", "agent", "tool", "worker"].includes(value))) {
       return true;
     }
 
@@ -1895,6 +1926,118 @@ export class ClawSpecService {
       params.accountId ?? "default",
       params.conversationId ?? "main",
     ].join(":");
+  }
+
+  private parseSinglePathArgument(
+    rawArgs: string,
+    usageMessage: string,
+  ): { value: string } | { error: string } {
+    const trimmed = rawArgs.trim();
+    if (!trimmed) {
+      return { value: "" };
+    }
+
+    const firstChar = trimmed[0];
+    if (firstChar === "\"" || firstChar === "'") {
+      if (trimmed.length < 2 || !trimmed.endsWith(firstChar)) {
+        return { error: "Unterminated quoted argument." };
+      }
+      const inner = trimmed.slice(1, -1).trim();
+      return { value: inner };
+    }
+
+    if (/\s/.test(trimmed)) {
+      return { error: usageMessage };
+    }
+
+    return { value: trimmed };
+  }
+
+  private async maybeSendPlanningNextStepNotice(project: ProjectState, event: AgentEndEvent): Promise<void> {
+    if (!project.changeName) {
+      return;
+    }
+
+    const latestAssistantText = sanitizePlanningMessageText(extractLatestMessageTextByRole(event.messages, "assistant") ?? "").toLowerCase();
+    const alreadyContainsNextStep = latestAssistantText.includes("cs-work")
+      || latestAssistantText.includes("/clawspec archive")
+      || latestAssistantText.includes("run `cs-plan`");
+    if (alreadyContainsNextStep) {
+      return;
+    }
+
+    const projectLabel = project.projectName ?? "project";
+    if (project.status === "ready" && project.phase === "tasks") {
+      await this.sendChannelUpdate(
+        project.channelKey,
+        `✅ ${projectLabel}-${project.changeName} Planning ready. Next: run \`cs-work\` to start implementation.`,
+      );
+      return;
+    }
+
+    if (project.status === "done") {
+      await this.sendChannelUpdate(
+        project.channelKey,
+        `🏁 ${projectLabel}-${project.changeName} Planning complete and tasks are already done. Next: use \`/clawspec archive\`.`,
+      );
+      return;
+    }
+
+    if (project.status === "blocked") {
+      await this.sendChannelUpdate(
+        project.channelKey,
+        `⚠ ${projectLabel}-${project.changeName} Planning blocked. Next: review blockers, then run \`cs-plan\` again.`,
+      );
+    }
+  }
+
+  private async sendChannelUpdate(channelKey: string, text: string): Promise<void> {
+    const runtime = (this.api as { runtime?: OpenClawPluginApi["runtime"] }).runtime;
+    if (!runtime?.channel) {
+      return;
+    }
+
+    const route = parseChannelKey(channelKey);
+    const accountId = route.accountId && route.accountId !== "default" ? route.accountId : undefined;
+
+    try {
+      switch (route.channel) {
+        case "discord":
+          await runtime.channel.discord.sendMessageDiscord(`channel:${route.channelId}`, text, {
+            cfg: this.api.config,
+            accountId,
+            silent: true,
+          });
+          return;
+        case "telegram":
+          await runtime.channel.telegram.sendMessageTelegram(route.channelId, text, {
+            cfg: this.api.config,
+            accountId,
+            silent: true,
+            messageThreadId: parseOptionalNumber(route.conversationId),
+          });
+          return;
+        case "slack":
+          await runtime.channel.slack.sendMessageSlack(route.channelId, text, {
+            cfg: this.api.config,
+            accountId,
+            threadTs: route.conversationId !== "main" ? route.conversationId : undefined,
+          });
+          return;
+        case "signal":
+          await runtime.channel.signal.sendMessageSignal(route.channelId, text, {
+            cfg: this.api.config,
+            accountId,
+          });
+          return;
+        default:
+          this.logger.info(`[clawspec] planning notice (${route.channel} ${route.channelId}): ${text}`);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[clawspec] failed to send planning notice to ${channelKey}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async ensureSessionProject(channelKey: string, workspacePath: string): Promise<ProjectState> {
@@ -2200,7 +2343,7 @@ export class ClawSpecService {
     }
     await this.writeLatestSummary(repoStatePaths, latestSummary);
 
-    await this.stateStore.updateProject(project.channelKey, (current) => ({
+    const finalized = await this.stateStore.updateProject(project.channelKey, (current) => ({
       ...current,
       status,
       phase,
@@ -2219,6 +2362,8 @@ export class ClawSpecService {
         lastSyncedAt,
       },
     }));
+
+    await this.maybeSendPlanningNextStepNotice(finalized, event);
   }
 
   private resolvePostRunStatus(
@@ -3006,6 +3151,14 @@ function isWorkflowControlLine(line: string): boolean {
     || lower.startsWith("`cs-work` becomes available")
     || lower.startsWith("command fallback:")
     || lower === "`cs-work` is not available yet.";
+}
+
+function parseOptionalNumber(value: string): number | undefined {
+  if (!value || value === "main") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -40,7 +40,8 @@ export function expandHomeDir(input: string): string {
 
 export function resolveUserPath(input: string, baseDir = process.cwd()): string {
   const expanded = expandHomeDir(input);
-  return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(baseDir, expanded);
+  const isAbsolute = path.isAbsolute(expanded) || path.win32.isAbsolute(expanded);
+  return isAbsolute ? path.normalize(expanded) : path.resolve(baseDir, expanded);
 }
 
 export function getProjectMemoryFilePath(stateDir: string): string {

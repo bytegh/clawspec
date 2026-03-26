@@ -142,6 +142,20 @@ const plugin = {
             text: "ClawSpec is still bootstrapping dependencies. Try again in a moment.",
           };
         }
+        const subcommand = parseSubcommand(ctx.args);
+        if (requiresOpenSpec(subcommand)) {
+          try {
+            await ensureOpenSpecCli({
+              pluginRoot: PLUGIN_ROOT,
+              logger: api.logger,
+            });
+          } catch (error) {
+            return {
+              ok: false,
+              text: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }
         return service.handleProjectCommand(ctx);
       },
     });
@@ -157,6 +171,20 @@ const plugin = {
         accountId: ctx.accountId,
         conversationId: ctx.conversationId,
         sessionKey: (ctx as { sessionKey?: string }).sessionKey,
+        from: event.from,
+        metadata: event.metadata,
+      }, event.content);
+    });
+
+    api.on("message_sent", async (event, ctx) => {
+      await stateStore.initialize();
+      if (!service || !event.success) {
+        return;
+      }
+      service.recordOutboundMessageFromContext({
+        channelId: ctx.channelId,
+        accountId: ctx.accountId,
+        conversationId: ctx.conversationId,
       }, event.content);
     });
 
@@ -179,3 +207,22 @@ const plugin = {
 };
 
 export default plugin;
+
+function parseSubcommand(args: string | undefined): string {
+  const trimmed = (args ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const [first] = trimmed.split(/\s+/);
+  return (first ?? "").toLowerCase();
+}
+
+function requiresOpenSpec(subcommand: string): boolean {
+  return [
+    "use",
+    "proposal",
+    "continue",
+    "status",
+    "archive",
+  ].includes(subcommand);
+}

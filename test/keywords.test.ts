@@ -51,6 +51,12 @@ test("parseClawSpecKeyword trims input", () => {
   assert.equal(result?.kind, "work");
 });
 
+test("parseClawSpecKeyword accepts slash-prefixed and punctuated control words", () => {
+  assert.equal(parseClawSpecKeyword("/cs-work")?.kind, "work");
+  assert.equal(parseClawSpecKeyword("`cs-plan`")?.kind, "plan");
+  assert.equal(parseClawSpecKeyword("cs-work。")?.kind, "work");
+});
+
 test("isClawSpecKeywordText returns boolean correctly", () => {
   assert.equal(isClawSpecKeywordText("cs-plan"), true);
   assert.equal(isClawSpecKeywordText("hello"), false);
@@ -67,6 +73,12 @@ test("extractEmbeddedClawSpecKeyword finds keyword with args in multiline text",
   const result = extractEmbeddedClawSpecKeyword(text);
   assert.equal(result?.kind, "continue");
   assert.equal(result?.args, "hello world");
+});
+
+test("extractEmbeddedClawSpecKeyword finds slash-prefixed keyword in multiline text", () => {
+  const text = "Summary:\n/cs-work\nProceed please.";
+  const result = extractEmbeddedClawSpecKeyword(text);
+  assert.equal(result?.kind, "work");
 });
 
 test("extractEmbeddedClawSpecKeyword returns direct match for single-line input", () => {

@@ -29,20 +29,21 @@ const COMMAND_ALIASES: Record<string, ClawSpecKeywordKind> = {
 
 export function parseClawSpecKeyword(text: string): ClawSpecKeywordIntent | null {
   const trimmed = text.trim();
-  if (!trimmed.toLowerCase().startsWith("cs-")) {
+  if (!trimmed) {
     return null;
   }
 
   const firstWhitespace = trimmed.search(/\s/);
   const rawCommand = firstWhitespace === -1 ? trimmed : trimmed.slice(0, firstWhitespace);
-  const kind = COMMAND_ALIASES[rawCommand.toLowerCase()];
+  const normalizedCommand = normalizeKeywordCommand(rawCommand);
+  const kind = COMMAND_ALIASES[normalizedCommand];
   if (!kind) {
     return null;
   }
 
   return {
     kind,
-    command: rawCommand.toLowerCase(),
+    command: normalizedCommand,
     args: firstWhitespace === -1 ? "" : trimmed.slice(firstWhitespace + 1).trim(),
     raw: trimmed,
   };
@@ -52,21 +53,27 @@ export function isClawSpecKeywordText(text: string): boolean {
   return parseClawSpecKeyword(text) !== null;
 }
 
-const EMBEDDED_KEYWORD_PATTERN = new RegExp(
-  `(?:^|\\r?\\n)\\s*(cs-(?:${Object.keys(COMMAND_ALIASES).map((k) => k.slice(3)).join("|")})(?:[^\\S\\r\\n]+[^\\r\\n]+)?)\\s*(?=\\r?\\n|$)`,
-  "i",
-);
-
 export function extractEmbeddedClawSpecKeyword(text: string): ClawSpecKeywordIntent | null {
   const direct = parseClawSpecKeyword(text);
   if (direct) {
     return direct;
   }
 
-  const embeddedMatch = text.match(EMBEDDED_KEYWORD_PATTERN);
-  if (!embeddedMatch?.[1]) {
-    return null;
+  for (const line of text.split(/\r?\n/)) {
+    const parsed = parseClawSpecKeyword(line.trim());
+    if (parsed) {
+      return parsed;
+    }
   }
 
-  return parseClawSpecKeyword(embeddedMatch[1]);
+  return null;
+}
+
+function normalizeKeywordCommand(rawCommand: string): string {
+  return rawCommand
+    .trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^\/+/, "")
+    .replace(/[。！？!?,，；;：:]+$/u, "")
+    .toLowerCase();
 }

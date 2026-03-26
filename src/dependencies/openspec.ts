@@ -70,22 +70,26 @@ export async function ensureOpenSpecCli(
   }
 
   options.logger?.warn?.(
-    `[clawspec] openspec CLI not found (${globalCheck.message}); installing plugin-local ${OPENSPEC_PACKAGE_NAME}`,
+    `[clawspec] openspec CLI not ready (${globalCheck.message}); installing plugin-local ${OPENSPEC_PACKAGE_NAME}`,
   );
 
   const install = await runner({
     command: "npm",
-    args: ["install", "--omit=dev", "--no-save", "--package-lock=false", OPENSPEC_PACKAGE_NAME],
+    args: [
+      "install",
+      "--omit=dev",
+      "--no-save",
+      "--package-lock=false",
+      OPENSPEC_PACKAGE_NAME,
+    ],
     cwd: options.pluginRoot,
     env,
   });
   if (install.error || (install.code ?? 0) !== 0) {
     if (isMissingCommandResult(install, "npm")) {
-      throw new Error("npm is required to install plugin-local openspec but was not found on PATH");
+      throw new Error(buildOpenSpecInstallMessage("npm is not available on PATH"));
     }
-    throw new Error(
-      `failed to install plugin-local openspec: ${describeCommandFailure(install, "npm install")}`,
-    );
+    throw new Error(`failed to install plugin-local openspec: ${describeCommandFailure(install, "npm install")}`);
   }
 
   const postcheck = await checkOpenSpecVersion(runner, {
@@ -103,6 +107,14 @@ export async function ensureOpenSpecCli(
     version: postcheck.version,
     localBinDir,
   };
+}
+
+export function buildOpenSpecInstallMessage(reason: string): string {
+  return [
+    `OpenSpec CLI is required but not available (${reason}).`,
+    "Install OpenSpec, then retry your command:",
+    "`npm install -g @fission-ai/openspec`",
+  ].join("\n");
 }
 
 async function checkOpenSpecVersion(
