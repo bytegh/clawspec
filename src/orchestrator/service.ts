@@ -250,7 +250,8 @@ export class ClawSpecService {
     event: PromptBuildEvent,
     ctx: PromptBuildContext,
   ): Promise<{ prependContext?: string; prependSystemContext?: string } | void> {
-    debugLog(`[handleBeforePromptBuild] prompt="${event.prompt}", trigger=${ctx.trigger}`);
+    debugLog(`[handleBeforePromptBuild] prompt="${event.prompt.substring(0, 200)}..."`);
+    debugLog(`[handleBeforePromptBuild] trigger=${ctx.trigger}`);
     if (!shouldHandleUserVisiblePrompt(ctx.trigger)) {
       debugLog(`[handleBeforePromptBuild] Skipped: non-user trigger`);
       this.logger.debug?.(
