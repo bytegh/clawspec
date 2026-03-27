@@ -1,6 +1,6 @@
 {
   "name": "clawspec",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "type": "module",
   "description": "OpenClaw plugin that orchestrates OpenSpec project workflows with visible main-agent execution.",
   "keywords": [
