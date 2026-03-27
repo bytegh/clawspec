@@ -93,5 +93,5 @@ test("implementation prompt instructs the worker to use the helper", async () =>
   });
 
   assert.match(prompt, /Use the worker IO helper instead of editing .*worker-progress\.jsonl directly\./);
-  assert.match(prompt, /worker_io\.mjs" event --kind <status\|task_start\|task_done\|blocked>/);
+  assert.match(prompt, /worker_io\.mjs['"] event --kind <status\|task_start\|task_done\|blocked>/);
 });
