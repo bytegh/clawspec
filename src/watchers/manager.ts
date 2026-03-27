@@ -1229,6 +1229,8 @@ class ExecutionWatcher {
       cwd: project.repoPath,
       agentId: workerAgentId,
       promptLength: prompt.length,
+      acpxCommand: this.acpClient.command,
+      acpxEnv: this.acpClient.env,
     });
 
     const runTurnPromise = this.acpClient.runTurn({
