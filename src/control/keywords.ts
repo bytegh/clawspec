@@ -1,4 +1,3 @@
-import { debugLog } from "../utils/debug-log.ts";
 
 export type ClawSpecKeywordKind =
   | "plan"
@@ -56,41 +55,33 @@ export function isClawSpecKeywordText(text: string): boolean {
 }
 
 export function extractEmbeddedClawSpecKeyword(text: string): ClawSpecKeywordIntent | null {
-  debugLog(`[extractEmbeddedClawSpecKeyword] text length=${text.length}`);
   const direct = parseClawSpecKeyword(text);
   if (direct) {
-    debugLog(`[extractEmbeddedClawSpecKeyword] Found direct: ${direct.command}`);
     return direct;
   }
 
   const lines = text.split(/\r?\n/);
-  debugLog(`[extractEmbeddedClawSpecKeyword] Checking ${lines.length} lines`);
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    debugLog(`[extractEmbeddedClawSpecKeyword] Line: "${trimmed.substring(0, 50)}..."`);
 
     // Try parsing the whole line first
     const parsed = parseClawSpecKeyword(trimmed);
     if (parsed) {
-      debugLog(`[extractEmbeddedClawSpecKeyword] Found in line: ${parsed.command}`);
       return parsed;
     }
 
     // Try each word in the line
     const words = trimmed.split(/\s+/);
-    debugLog(`[extractEmbeddedClawSpecKeyword] Checking ${words.length} words`);
     for (const word of words) {
       const wordParsed = parseClawSpecKeyword(word);
       if (wordParsed) {
-        debugLog(`[extractEmbeddedClawSpecKeyword] Found in word: ${wordParsed.command}`);
         return wordParsed;
       }
     }
   }
 
-  debugLog(`[extractEmbeddedClawSpecKeyword] No keyword found`);
   return null;
 }
 
