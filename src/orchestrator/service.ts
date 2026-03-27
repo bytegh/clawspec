@@ -250,7 +250,9 @@ export class ClawSpecService {
     event: PromptBuildEvent,
     ctx: PromptBuildContext,
   ): Promise<{ prependContext?: string; prependSystemContext?: string } | void> {
+    debugLog(`[handleBeforePromptBuild] prompt="${event.prompt}", trigger=${ctx.trigger}`);
     if (!shouldHandleUserVisiblePrompt(ctx.trigger)) {
+      debugLog(`[handleBeforePromptBuild] Skipped: non-user trigger`);
       this.logger.debug?.(
         `[clawspec] skipping prompt injection for non-user trigger "${ctx.trigger ?? "unknown"}".`,
       );
@@ -258,6 +260,7 @@ export class ClawSpecService {
     }
 
     const keyword = extractEmbeddedClawSpecKeyword(event.prompt);
+    debugLog(`[handleBeforePromptBuild] keyword=${keyword?.command}`);
     if (keyword) {
       this.logger.debug?.(
         `[clawspec] detected control keyword "${keyword.command}" for prompt build (session=${ctx.sessionKey ?? "unknown"}).`,
