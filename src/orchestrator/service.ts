@@ -2467,12 +2467,8 @@ export class ClawSpecService {
       }
     }
 
-    await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
-    const writtenSnapshot = await journalStore.readSnapshot(repoStatePaths.planningJournalSnapshotFile);
-    const currentDigest = await journalStore.digest(project.changeName);
-    this.logger.info(`[clawspec] Planning snapshot written for ${project.changeName}:`);
-    this.logger.info(`  - Snapshot: entryCount=${writtenSnapshot?.entryCount}, lastEntryAt=${writtenSnapshot?.lastEntryAt}, hash=${writtenSnapshot?.contentHash?.slice(0, 8)}`);
-    this.logger.info(`  - Current digest: entryCount=${currentDigest.entryCount}, lastEntryAt=${currentDigest.lastEntryAt}, hash=${currentDigest.contentHash.slice(0, 8)}`);
+    const snapshot = await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
+    this.logger.info(`[clawspec] Planning snapshot written for ${project.changeName}: entryCount=${snapshot.entryCount}, lastEntryAt=${snapshot.lastEntryAt}`);
     await this.writeLatestSummary(repoStatePaths, latestSummary);
 
     const finalized = await this.stateStore.updateProject(project.channelKey, (current) => ({
@@ -2489,8 +2485,8 @@ export class ClawSpecService {
       boundSessionKey: current.boundSessionKey,
       planningJournal: {
         dirty: journalDirty,
-        entryCount: current.planningJournal?.entryCount ?? 0,
-        lastEntryAt: current.planningJournal?.lastEntryAt,
+        entryCount: snapshot.entryCount,
+        lastEntryAt: snapshot.lastEntryAt,
         lastSyncedAt,
       },
     }));
