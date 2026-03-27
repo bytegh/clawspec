@@ -122,3 +122,34 @@ test("snapshot correctly captures all journal entries including assistant messag
   assert.equal(snapshot.lastEntryAt, digest.lastEntryAt);
   assert.equal(snapshot.contentHash, digest.contentHash);
 });
+
+test("snapshot sync after cs-plan, add requirement, cs-plan again", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-replan-"));
+  const journalPath = path.join(tempRoot, "planning-journal.jsonl");
+  const snapshotPath = path.join(tempRoot, "planning-journal.snapshot.json");
+  const store = new PlanningJournalStore(journalPath);
+
+  await store.append({
+    timestamp: "2026-03-27T06:00:00.000Z",
+    changeName: "test",
+    role: "user",
+    text: "initial requirement",
+  });
+
+  const snapshot1 = await store.writeSnapshot(snapshotPath, "test", "2026-03-27T06:05:00.000Z");
+  assert.equal(snapshot1.entryCount, 1);
+  assert.equal(await store.hasUnsyncedChanges("test", snapshotPath), false);
+
+  await store.append({
+    timestamp: "2026-03-27T06:10:00.000Z",
+    changeName: "test",
+    role: "user",
+    text: "additional requirement",
+  });
+
+  assert.equal(await store.hasUnsyncedChanges("test", snapshotPath), true);
+
+  const snapshot2 = await store.writeSnapshot(snapshotPath, "test", "2026-03-27T06:15:00.000Z");
+  assert.equal(snapshot2.entryCount, 2);
+  assert.equal(await store.hasUnsyncedChanges("test", snapshotPath), false);
+});
