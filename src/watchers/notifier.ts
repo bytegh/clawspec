@@ -50,13 +50,22 @@ export class ClawSpecNotifier {
           });
           return;
         case "webchat":
+        case "main":
           await this.api.runtime.channel.sendMessage(route.channelId, text, {
             cfg: this.api.config,
             accountId,
           });
           return;
         default:
-          this.logger.info(`[clawspec] watcher update (${route.channel} ${route.channelId}): ${text}`);
+          // Try generic sendMessage for unknown channel types
+          try {
+            await this.api.runtime.channel.sendMessage(route.channelId, text, {
+              cfg: this.api.config,
+              accountId,
+            });
+          } catch {
+            this.logger.info(`[clawspec] watcher update (${route.channel} ${route.channelId}): ${text}`);
+          }
       }
     } catch (error) {
       this.logger.warn(
