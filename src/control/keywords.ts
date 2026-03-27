@@ -61,17 +61,19 @@ export function extractEmbeddedClawSpecKeyword(text: string): ClawSpecKeywordInt
 
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
+
+    // Try parsing the whole line first
     const parsed = parseClawSpecKeyword(trimmed);
     if (parsed) {
       return parsed;
     }
 
-    // Try to extract keyword from end of line (after timestamp prefix)
-    const lastWord = trimmed.split(/\s+/).pop();
-    if (lastWord) {
-      const lastParsed = parseClawSpecKeyword(lastWord);
-      if (lastParsed) {
-        return lastParsed;
+    // Try each word in the line
+    const words = trimmed.split(/\s+/);
+    for (const word of words) {
+      const wordParsed = parseClawSpecKeyword(word);
+      if (wordParsed) {
+        return wordParsed;
       }
     }
   }
