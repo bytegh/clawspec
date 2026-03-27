@@ -150,6 +150,12 @@ export class AcpWorkerClient {
       allowErrorCodes: ["NO_SESSION"],
     });
 
+    await debugLog(`sessions ensure result`, {
+      sessionKey: descriptor.sessionKey,
+      eventsCount: events.length,
+      events: events.slice(0, 3),
+    });
+
     if (events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION")) {
       await debugLog(`Session not found, creating new session`, { sessionKey: descriptor.sessionKey });
       events = await this.runControlCommand({
