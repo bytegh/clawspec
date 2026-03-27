@@ -1,5 +1,4 @@
 import path from "node:path";
-import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { getNextIncompleteTask, parseTasksFile } from "../openspec/tasks.ts";
 import { OpenSpecClient } from "../openspec/cli.ts";
@@ -908,13 +907,6 @@ class ExecutionWatcher {
 
       const importedSkills = await loadClawSpecSkillBundle(["apply"]);
 
-      await debugLog(`Starting worker for task ${firstTask.id}`, {
-        taskId: firstTask.id,
-        taskDescription: firstTask.description,
-        remainingTasksCount: remainingTasks.length,
-        contextFiles: Object.keys(apply.contextFiles),
-      });
-
       ({ runError } = await this.runAcpTurnWithTracking(
         runningProject,
         repoStatePaths,
@@ -927,16 +919,6 @@ class ExecutionWatcher {
     }
     if (this.shutdownRequested) {
       return false;
-    }
-
-    if (runError) {
-      await debugLog(`Worker failed for task ${firstTask.id}`, {
-        error: runError instanceof Error ? runError.message : String(runError),
-        errorStack: runError instanceof Error ? runError.stack : undefined,
-        executionResultExists: await pathExists(repoStatePaths.executionResultFile),
-      });
-    } else {
-      await debugLog(`Worker completed for task ${firstTask.id}`);
     }
 
     const { result, latest, requestedCancel, requestedPause } = await this.resolvePostRunState(
@@ -1276,18 +1258,8 @@ class ExecutionWatcher {
       ]);
       if (winner.kind === "error") {
         runError = forcedRunError ?? winner.error;
-        await debugLog(`ACP runTurn failed`, {
-          error: winner.error instanceof Error ? winner.error.message : String(winner.error),
-          errorStack: winner.error instanceof Error ? winner.error.stack : undefined,
-        });
       } else if (winner.kind === "watch" && forcedRunError) {
         runError = forcedRunError;
-        await debugLog(`ACP runTurn forced error`, {
-          reason: winner.reason,
-          error: forcedRunError instanceof Error ? forcedRunError.message : String(forcedRunError),
-        });
-      } else {
-        await debugLog(`ACP runTurn completed`, { winnerKind: winner.kind });
       }
     } finally {
       stopWatchingTerminal = true;
@@ -3079,18 +3051,5 @@ function displayWatcherEventIcon(kind?: string): string {
       return "⚠️";
     default:
       return "ℹ️";
-  }
-}
-
-async function debugLog(message: string, data?: unknown): Promise<void> {
-  try {
-    const logPath = path.join(os.homedir(), ".openclaw", "clawspec-worker-debug.log");
-    const timestamp = new Date().toISOString();
-    const logLine = data
-      ? `[${timestamp}] ${message}\n${JSON.stringify(data, null, 2)}\n\n`
-      : `[${timestamp}] ${message}\n\n`;
-    await appendUtf8(logPath, logLine).catch(() => undefined);
-  } catch {
-    // Ignore logging errors
   }
 }

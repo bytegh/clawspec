@@ -1,10 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import os from "node:os";
-import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { runShellCommand, spawnShellCommand, terminateChildProcess } from "../utils/shell-command.ts";
-import { appendUtf8 } from "../utils/fs.ts";
 
 export type AcpWorkerEvent =
   | {
@@ -137,12 +134,6 @@ export class AcpWorkerClient {
     };
     this.sessionDescriptors.set(params.sessionKey, descriptor);
 
-    await debugLog(`Ensuring acpx session`, {
-      sessionKey: descriptor.sessionKey,
-      agentId: descriptor.agentId,
-      cwd: descriptor.cwd,
-    });
-
     let events = await this.runControlCommand({
       agentId: descriptor.agentId,
       cwd: descriptor.cwd,
@@ -150,22 +141,12 @@ export class AcpWorkerClient {
       allowErrorCodes: ["NO_SESSION"],
     });
 
-    await debugLog(`sessions ensure result`, {
-      sessionKey: descriptor.sessionKey,
-      eventsCount: events.length,
-      events: events.slice(0, 3),
-    });
-
     if (events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION") || events.length === 0) {
-      await debugLog(`Session not found or empty response, creating new session`, { sessionKey: descriptor.sessionKey });
       events = await this.runControlCommand({
         agentId: descriptor.agentId,
         cwd: descriptor.cwd,
         command: ["sessions", "new", "--name", descriptor.sessionKey],
       });
-      await debugLog(`Session created`, { sessionKey: descriptor.sessionKey, eventsCount: events.length });
-    } else {
-      await debugLog(`Session already exists`, { sessionKey: descriptor.sessionKey });
     }
 
     const identifiers = extractSessionIdentifiers(events);
@@ -209,13 +190,6 @@ export class AcpWorkerClient {
     const args = this.buildPromptArgs({
       agentId: descriptor.agentId,
       cwd: descriptor.cwd,
-      sessionKey: descriptor.sessionKey,
-    });
-    await debugLog(`Spawning acpx worker`, {
-      command: this.command,
-      args,
-      cwd: descriptor.cwd,
-      agentId: descriptor.agentId,
       sessionKey: descriptor.sessionKey,
     });
 
@@ -283,15 +257,6 @@ export class AcpWorkerClient {
 
       const exit = await waitForExit(child);
       this.recordSessionExit(params.sessionKey, descriptor, child.pid, exit.code, exit.signal, stderr);
-
-      await debugLog(`acpx worker exited`, {
-        sessionKey: params.sessionKey,
-        exitCode: exit.code,
-        signal: exit.signal,
-        stderr: stderr.trim(),
-        sawDone,
-        sawError,
-      });
 
       if (exit.error) {
         throw exit.error;
@@ -900,16 +865,3 @@ const timer = setInterval(() => {
   }
 }, safePollMs);
 `;
-
-async function debugLog(message: string, data?: unknown): Promise<void> {
-  try {
-    const logPath = path.join(os.homedir(), ".openclaw", "clawspec-worker-debug.log");
-    const timestamp = new Date().toISOString();
-    const logLine = data
-      ? `[${timestamp}] ${message}\n${JSON.stringify(data, null, 2)}\n\n`
-      : `[${timestamp}] ${message}\n\n`;
-    await appendUtf8(logPath, logLine).catch(() => undefined);
-  } catch {
-    // Ignore logging errors
-  }
-}
