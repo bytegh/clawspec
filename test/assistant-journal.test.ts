@@ -166,3 +166,38 @@ test("inbound bot/system messages are ignored by planning journal capture", asyn
   assert.equal(project?.planningJournal?.dirty, false);
   assert.equal(project?.planningJournal?.entryCount, 0);
 });
+
+test("heartbeat assistant replies are not appended to the planning journal", async () => {
+  const harness = await createServiceHarness("clawspec-ignore-heartbeat-journal-");
+  const { service, repoPath } = harness;
+  const channelKey = "discord:ignore-heartbeat-journal:default:main";
+  const promptContext = createPromptContext("ignore-heartbeat-journal");
+  const userPrompt = "Add one more API endpoint.";
+
+  await service.startProject(channelKey);
+  await service.useProject(channelKey, "demo-app");
+  await service.proposalProject(channelKey, "demo-change Demo change");
+  await service.recordPlanningMessageFromContext(promptContext, userPrompt);
+  await service.handleBeforePromptBuild(
+    { prompt: userPrompt, messages: [] },
+    promptContext,
+  );
+
+  await service.handleAgentEnd(
+    {
+      success: true,
+      messages: [
+        { role: "user", content: userPrompt },
+        { role: "assistant", content: "HEARTBEAT_OK" },
+      ],
+    },
+    promptContext,
+  );
+
+  const repoStatePaths = getRepoStatePaths(repoPath, "archives");
+  const journalStore = new PlanningJournalStore(repoStatePaths.planningJournalFile);
+  const entries = await journalStore.list("demo-change");
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.role, "user");
+});

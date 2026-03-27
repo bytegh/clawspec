@@ -951,7 +951,8 @@ export class ClawSpecService {
       return;
     }
 
-    const planningProject = await this.findPlanningProjectBySessionKey(ctx.sessionKey);
+    const planningProject = await this.findPlanningProjectBySessionKey(ctx.sessionKey)
+      ?? await this.findPlanningProjectByContext(ctx);
     if (planningProject) {
       await this.finalizePlanningTurn(planningProject, event);
       return;
@@ -2314,6 +2315,27 @@ export class ClawSpecService {
     );
   }
 
+  private async findPlanningProjectByContext(ctx: PromptBuildContext): Promise<ProjectState | undefined> {
+    const routingContext = deriveRoutingContext(ctx);
+    if (!routingContext.channelId) {
+      return undefined;
+    }
+
+    const match = await this.stateStore.findActiveProjectForMessage({
+      channel: routingContext.channel,
+      channelId: routingContext.channelId,
+      accountId: routingContext.accountId,
+      conversationId: routingContext.conversationId,
+    });
+    if (!match) {
+      return undefined;
+    }
+
+    return match.project.status === "planning" && match.project.phase === "planning_sync"
+      ? match.project
+      : undefined;
+  }
+
   private async findDiscussionProjectBySessionKey(sessionKey?: string): Promise<ProjectState | undefined> {
     if (!sessionKey) {
       return undefined;
@@ -3169,6 +3191,10 @@ function extractMessageText(value: unknown, depth = 0): string {
 function isPassiveAssistantPlanningMessage(text: string): boolean {
   const normalized = text.trim();
   if (!normalized) {
+    return true;
+  }
+
+  if (/^heartbeat(?:[_\s-]?(?:ok|ping|alive))?$/i.test(normalized)) {
     return true;
   }
 

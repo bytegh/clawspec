@@ -209,6 +209,48 @@ test("cs-plan runs visible planning sync and writes a fresh snapshot", async () 
   assert.equal(snapshot?.changeName, "demo-change");
 });
 
+test("cs-plan finalizes and writes a fresh snapshot even if agent_end sessionKey changes", async () => {
+  const harness = await createServiceHarness("clawspec-visible-plan-fallback-");
+  const { service, stateStore, repoPath } = harness;
+  const channelKey = "discord:visible-plan-fallback:default:main";
+  const promptContext = {
+    trigger: "user",
+    channel: "discord",
+    channelId: "visible-plan-fallback",
+    accountId: "default",
+    conversationId: "main",
+    sessionKey: "agent:main:discord:channel:visible-plan-fallback",
+  };
+
+  await service.startProject(channelKey);
+  await service.useProject(channelKey, "demo-app");
+  await service.proposalProject(channelKey, "demo-change Demo change");
+  await service.recordPlanningMessageFromContext(promptContext, "add another API endpoint");
+
+  await service.handleBeforePromptBuild(
+    { prompt: "cs-plan", messages: [] },
+    promptContext,
+  );
+
+  await service.handleAgentEnd(
+    { messages: [], success: true, durationMs: 10 },
+    {
+      ...promptContext,
+      sessionKey: "agent:main:discord:channel:visible-plan-fallback:other",
+    },
+  );
+
+  const finalized = await stateStore.getActiveProject(channelKey);
+  const repoStatePaths = getRepoStatePaths(repoPath, "archives");
+  const snapshot = await readJsonFile<any>(repoStatePaths.planningJournalSnapshotFile, null);
+
+  assert.equal(finalized?.status, "ready");
+  assert.equal(finalized?.phase, "tasks");
+  assert.equal(finalized?.planningJournal?.dirty, false);
+  assert.equal(snapshot?.changeName, "demo-change");
+  assert.equal(snapshot?.entryCount, 1);
+});
+
 test("cs-plan clears stale execution control artifacts from earlier worker runs", async () => {
   const harness = await createServiceHarness("clawspec-visible-plan-cleanup-");
   const { service, stateStore, repoPath } = harness;
