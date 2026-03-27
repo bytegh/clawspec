@@ -118,9 +118,10 @@ export async function ensureWorkerIoHelper(repoStatePaths: RepoStatePaths): Prom
 }
 
 export function buildWorkerIoEventCommandPrefix(repoStatePaths: RepoStatePaths): string {
-  return `node ${quoteForShell(repoStatePaths.workerIoFile)} event`;
-}
-
-function quoteForShell(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
+  const ioPath = repoStatePaths.workerIoFile;
+  // Use single quotes on POSIX, double quotes on Windows for cross-platform compatibility
+  if (process.platform === "win32") {
+    return `node "${ioPath.replace(/"/g, '""')}" event`;
+  }
+  return `node '${ioPath.replace(/'/g, `'\\''`)}' event`;
 }
