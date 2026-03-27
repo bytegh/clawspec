@@ -933,6 +933,7 @@ class ExecutionWatcher {
       await debugLog(`Worker failed for task ${firstTask.id}`, {
         error: runError instanceof Error ? runError.message : String(runError),
         errorStack: runError instanceof Error ? runError.stack : undefined,
+        executionResultExists: await pathExists(repoStatePaths.executionResultFile),
       });
     } else {
       await debugLog(`Worker completed for task ${firstTask.id}`);
