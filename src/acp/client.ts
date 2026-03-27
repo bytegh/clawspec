@@ -267,6 +267,16 @@ export class AcpWorkerClient {
 
       const exit = await waitForExit(child);
       this.recordSessionExit(params.sessionKey, descriptor, child.pid, exit.code, exit.signal, stderr);
+
+      await debugLog(`acpx worker exited`, {
+        sessionKey: params.sessionKey,
+        exitCode: exit.code,
+        signal: exit.signal,
+        stderr: stderr.trim(),
+        sawDone,
+        sawError,
+      });
+
       if (exit.error) {
         throw exit.error;
       }
