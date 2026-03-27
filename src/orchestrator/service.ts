@@ -675,6 +675,13 @@ export class ClawSpecService {
         repoStatePaths.planningJournalSnapshotFile,
         project.planningJournal?.lastSyncedAt,
       );
+      const snapshot = await journalStore.readSnapshot(repoStatePaths.planningJournalSnapshotFile);
+      const digest = await journalStore.digest(project.changeName);
+      this.logger.info(`[clawspec] cs-work check for ${project.changeName}:`);
+      this.logger.info(`  - hasUnsyncedChanges: ${hasUnsyncedChanges}`);
+      this.logger.info(`  - Snapshot: entryCount=${snapshot?.entryCount}, lastEntryAt=${snapshot?.lastEntryAt}, hash=${snapshot?.contentHash?.slice(0, 8)}`);
+      this.logger.info(`  - Current digest: entryCount=${digest.entryCount}, lastEntryAt=${digest.lastEntryAt}, hash=${digest.contentHash.slice(0, 8)}`);
+      this.logger.info(`  - fallbackLastSyncedAt: ${project.planningJournal?.lastSyncedAt}`);
       if (!hasUnsyncedChanges) {
         const isDetached = !isProjectContextAttached(project);
         if (isDetached) {
@@ -2460,9 +2467,12 @@ export class ClawSpecService {
       }
     }
 
-    if (!journalDirty) {
-      await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
-    }
+    await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
+    const writtenSnapshot = await journalStore.readSnapshot(repoStatePaths.planningJournalSnapshotFile);
+    const currentDigest = await journalStore.digest(project.changeName);
+    this.logger.info(`[clawspec] Planning snapshot written for ${project.changeName}:`);
+    this.logger.info(`  - Snapshot: entryCount=${writtenSnapshot?.entryCount}, lastEntryAt=${writtenSnapshot?.lastEntryAt}, hash=${writtenSnapshot?.contentHash?.slice(0, 8)}`);
+    this.logger.info(`  - Current digest: entryCount=${currentDigest.entryCount}, lastEntryAt=${currentDigest.lastEntryAt}, hash=${currentDigest.contentHash.slice(0, 8)}`);
     await this.writeLatestSummary(repoStatePaths, latestSummary);
 
     const finalized = await this.stateStore.updateProject(project.channelKey, (current) => ({
