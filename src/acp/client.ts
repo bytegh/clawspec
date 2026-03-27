@@ -186,6 +186,15 @@ export class AcpWorkerClient {
       cwd: descriptor.cwd,
       env: this.env,
     });
+
+    this.logger.debug?.(
+      `[clawspec] spawning acpx: ${this.command} ${this.buildPromptArgs({
+        agentId: descriptor.agentId,
+        cwd: descriptor.cwd,
+        sessionKey: descriptor.sessionKey,
+      }).join(' ')}`,
+    );
+
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdin.end(params.text);
