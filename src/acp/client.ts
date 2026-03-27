@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import os from "node:os";
+import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
 import { runShellCommand, spawnShellCommand, terminateChildProcess } from "../utils/shell-command.ts";
+import { appendUtf8 } from "../utils/fs.ts";
 
 export type AcpWorkerEvent =
   | {
@@ -187,13 +190,18 @@ export class AcpWorkerClient {
       env: this.env,
     });
 
-    this.logger.debug?.(
-      `[clawspec] spawning acpx: ${this.command} ${this.buildPromptArgs({
-        agentId: descriptor.agentId,
-        cwd: descriptor.cwd,
-        sessionKey: descriptor.sessionKey,
-      }).join(' ')}`,
-    );
+    const args = this.buildPromptArgs({
+      agentId: descriptor.agentId,
+      cwd: descriptor.cwd,
+      sessionKey: descriptor.sessionKey,
+    });
+    await debugLog(`Spawning acpx worker`, {
+      command: this.command,
+      args,
+      cwd: descriptor.cwd,
+      agentId: descriptor.agentId,
+      sessionKey: descriptor.sessionKey,
+    });
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -866,3 +874,16 @@ const timer = setInterval(() => {
   }
 }, safePollMs);
 `;
+
+async function debugLog(message: string, data?: unknown): Promise<void> {
+  try {
+    const logPath = path.join(os.homedir(), ".openclaw", "clawspec-worker-debug.log");
+    const timestamp = new Date().toISOString();
+    const logLine = data
+      ? `[${timestamp}] ${message}\n${JSON.stringify(data, null, 2)}\n\n`
+      : `[${timestamp}] ${message}\n\n`;
+    await appendUtf8(logPath, logLine).catch(() => undefined);
+  } catch {
+    // Ignore logging errors
+  }
+}
