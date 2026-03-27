@@ -6,6 +6,7 @@ import type {
   PluginCommandResult,
   PluginLogger,
 } from "openclaw/plugin-sdk";
+import { debugLog } from "../utils/debug-log.ts";
 import { ProjectMemoryStore } from "../memory/store.ts";
 import { OpenSpecClient, OpenSpecCommandError } from "../openspec/cli.ts";
 import { parseTasksFile } from "../openspec/tasks.ts";
@@ -316,16 +317,21 @@ export class ClawSpecService {
 
     switch (keyword.kind) {
       case "plan": {
+        debugLog(`[cs-plan] Triggered for project: ${match?.project.changeName}`);
         if (!match?.project.repoPath || !match.project.changeName) {
+          debugLog(`[cs-plan] Missing repoPath or changeName`);
           return this.buildPluginReplyInjection(
             event.prompt,
             "Select a project and create a change first with `/clawspec use <project-name>` and `/clawspec proposal <change-name> [description]`.",
           );
         }
+        debugLog(`[cs-plan] Calling startVisiblePlanningSync`);
         const planningSync = await this.startVisiblePlanningSync(match.channelKey, match.project, ctx, event.prompt, "apply");
         if ("prependContext" in planningSync || "prependSystemContext" in planningSync) {
+          debugLog(`[cs-plan] Returning prompt injection`);
           return planningSync;
         }
+        debugLog(`[cs-plan] Returning plugin reply`);
         return this.buildPluginReplyInjection(event.prompt, planningSync.text ?? "");
       }
       case "work":
@@ -758,14 +764,19 @@ export class ClawSpecService {
     userPrompt: string,
     mode: ExecutionMode,
   ): Promise<{ prependContext?: string; prependSystemContext?: string } | PluginCommandResult> {
+    debugLog(`[startVisiblePlanningSync] Called for ${project.changeName}`);
+    this.logger.info(`[clawspec] startVisiblePlanningSync called for ${project.changeName}`);
     void project;
     void mode;
 
     const prepared = await this.preparePlanningSync(channelKey);
     if ("result" in prepared) {
+      debugLog(`[startVisiblePlanningSync] preparePlanningSync failed`);
+      this.logger.warn(`[clawspec] preparePlanningSync returned error: ${prepared.result.text}`);
       return prepared.result;
     }
 
+    debugLog(`[startVisiblePlanningSync] Updating state to planning`);
     const startedAt = new Date().toISOString();
     const runningProject = await this.stateStore.updateProject(channelKey, (current) => ({
       ...current,
@@ -779,6 +790,8 @@ export class ClawSpecService {
       execution: undefined,
       lastExecutionAt: startedAt,
     }));
+    debugLog(`[startVisiblePlanningSync] State updated: status=${runningProject.status}, phase=${runningProject.phase}, sessionKey=${runningProject.boundSessionKey}`);
+    this.logger.info(`[clawspec] Project state updated: status=planning, phase=planning_sync, boundSessionKey=${runningProject.boundSessionKey}`);
 
     return await this.buildPlanningSyncInjection(runningProject, userPrompt, prepared.instructionResults);
   }
@@ -896,6 +909,7 @@ export class ClawSpecService {
   }
 
   async handleAgentEnd(event: AgentEndEvent, ctx: PromptBuildContext): Promise<void> {
+    debugLog(`[agent_end] Called, sessionKey=${ctx.sessionKey}`);
     const runningProject = await this.findRunningProjectBySessionKey(ctx.sessionKey);
     if (runningProject?.repoPath && runningProject.changeName) {
       const project = runningProject;
@@ -960,7 +974,9 @@ export class ClawSpecService {
 
     const planningProject = await this.findPlanningProjectBySessionKey(ctx.sessionKey)
       ?? await this.findPlanningProjectByContext(ctx);
+    debugLog(`[agent_end] Planning project: ${planningProject?.changeName}, status=${planningProject?.status}, phase=${planningProject?.phase}`);
     if (planningProject) {
+      debugLog(`[agent_end] Calling finalizePlanningTurn`);
       this.logger.info(`[clawspec] agent_end: found planning project ${planningProject.changeName}, calling finalizePlanningTurn`);
       await this.finalizePlanningTurn(planningProject, event);
       return;
@@ -2409,8 +2425,10 @@ export class ClawSpecService {
   }
 
   private async finalizePlanningTurn(project: ProjectState, event: AgentEndEvent): Promise<void> {
+    debugLog(`[finalizePlanningTurn] Called for ${project.changeName}, success=${event.success}`);
     this.logger.info(`[clawspec] finalizePlanningTurn called for ${project.changeName}, success=${event.success}`);
     if (!project.repoPath || !project.changeName) {
+      debugLog(`[finalizePlanningTurn] Skipped: missing repoPath or changeName`);
       this.logger.warn(`[clawspec] finalizePlanningTurn skipped: missing repoPath or changeName`);
       return;
     }
@@ -2470,7 +2488,9 @@ export class ClawSpecService {
       }
     }
 
+    debugLog(`[finalizePlanningTurn] Writing snapshot`);
     const snapshot = await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
+    debugLog(`[finalizePlanningTurn] Snapshot written: entryCount=${snapshot.entryCount}, lastEntryAt=${snapshot.lastEntryAt}`);
     this.logger.info(`[clawspec] Planning snapshot written for ${project.changeName}: entryCount=${snapshot.entryCount}, lastEntryAt=${snapshot.lastEntryAt}`);
     this.logger.info(`[clawspec] Updating project state: status=${status}, phase=${phase}, dirty=${journalDirty}`);
     await this.writeLatestSummary(repoStatePaths, latestSummary);
