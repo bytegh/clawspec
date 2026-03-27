@@ -49,6 +49,12 @@ export class ClawSpecNotifier {
             accountId,
           });
           return;
+        case "webchat":
+          await this.api.runtime.channel.sendMessage(route.channelId, text, {
+            cfg: this.api.config,
+            accountId,
+          });
+          return;
         default:
           this.logger.info(`[clawspec] watcher update (${route.channel} ${route.channelId}): ${text}`);
       }
