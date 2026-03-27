@@ -137,6 +137,12 @@ export class AcpWorkerClient {
     };
     this.sessionDescriptors.set(params.sessionKey, descriptor);
 
+    await debugLog(`Ensuring acpx session`, {
+      sessionKey: descriptor.sessionKey,
+      agentId: descriptor.agentId,
+      cwd: descriptor.cwd,
+    });
+
     let events = await this.runControlCommand({
       agentId: descriptor.agentId,
       cwd: descriptor.cwd,
@@ -145,11 +151,15 @@ export class AcpWorkerClient {
     });
 
     if (events.some((event) => toAcpxErrorEvent(event)?.code === "NO_SESSION")) {
+      await debugLog(`Session not found, creating new session`, { sessionKey: descriptor.sessionKey });
       events = await this.runControlCommand({
         agentId: descriptor.agentId,
         cwd: descriptor.cwd,
         command: ["sessions", "new", "--name", descriptor.sessionKey],
       });
+      await debugLog(`Session created`, { sessionKey: descriptor.sessionKey, eventsCount: events.length });
+    } else {
+      await debugLog(`Session already exists`, { sessionKey: descriptor.sessionKey });
     }
 
     const identifiers = extractSessionIdentifiers(events);
