@@ -1918,84 +1918,8 @@ export class ClawSpecService {
   }
 
   async runDoctor(rawArgs?: string): Promise<PluginCommandResult> {
-    const action = rawArgs?.trim().toLowerCase();
-    const issues: string[] = [];
-    const fixes: string[] = [];
-
     const acpxConfigPath = path.join(os.homedir(), ".acpx", "config.json");
-    let acpxConfig: Record<string, unknown> | null = null;
-    const raw = await tryReadUtf8(acpxConfigPath);
-    if (raw === undefined) {
-      // No config file - that's fine
-    } else {
-      try {
-        acpxConfig = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        issues.push(`\`${acpxConfigPath}\` contains invalid JSON. acpx may fail to start.`);
-        fixes.push(`Fix the JSON syntax in \`${acpxConfigPath}\`, or delete the file to use defaults.`);
-      }
-    }
-
-    let hasAgentIssue = false;
-    if (acpxConfig) {
-      const agents = acpxConfig.agents;
-      if (agents && typeof agents === "object" && Object.keys(agents as object).length > 0) {
-        hasAgentIssue = true;
-        const agentKeys = Object.keys(agents as object).map((k) => `\`${k}\``).join(", ");
-        issues.push(
-          `\`${acpxConfigPath}\` has custom agent entries: ${agentKeys}.\n`
-          + `  Custom agent configurations (e.g. pointing to a local CLI) can cause session creation to fail with "stdin is not a terminal".`,
-        );
-        fixes.push(
-          `Set \`"agents": {}\` in \`${acpxConfigPath}\` to use the default agent launcher.\n`
-          + `  Run \`/clawspec doctor fix\` to apply this fix automatically.`,
-        );
-      }
-    }
-
-    if (action === "fix") {
-      if (!acpxConfig) {
-        return errorReply("Cannot fix: acpx config file is missing or has invalid JSON. Please fix it manually.");
-      }
-      if (!hasAgentIssue) {
-        return okReply("Nothing to fix. acpx agent configuration is already clean.");
-      }
-      acpxConfig.agents = {};
-      await writeJsonFile(acpxConfigPath, acpxConfig);
-      return okReply(
-        [
-          heading("Doctor Fix Applied"),
-          "",
-          `Cleared custom agent entries in \`${acpxConfigPath}\`.`,
-          "`\"agents\"` is now `{}`. acpx will use the default agent launcher.",
-          "",
-          "Please retry your previous command.",
-        ].join("\n"),
-      );
-    }
-
-    if (issues.length === 0) {
-      return okReply(
-        [
-          heading("Doctor"),
-          "",
-          "No issues found. acpx configuration looks healthy.",
-        ].join("\n"),
-      );
-    }
-
-    return okReply(
-      [
-        heading("Doctor"),
-        "",
-        `Found ${issues.length} issue${issues.length > 1 ? "s" : ""}:`,
-        "",
-        ...issues.flatMap((issue, i) => [`**${i + 1}.** ${issue}`, ""]),
-        "Suggested fixes:",
-        "",
-        ...fixes.flatMap((fix, i) => [`**${i + 1}.** ${fix}`, ""]),
-      ].join("\n"),
-    );
+    return await runDoctorCommand(acpxConfigPath, rawArgs);
   }
 
   private async captureIncomingMessage(channelKey: string, project: ProjectState, text: string): Promise<ProjectState> {
@@ -3386,4 +3310,139 @@ function parseOptionalNumber(value: string): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+type DoctorIssue = {
+  id: string;
+  message: string;
+  fix: string;
+};
+
+type DoctorContext = {
+  acpxConfigPath: string;
+  acpxConfig: Record<string, unknown> | null;
+  acpxConfigError: boolean;
+};
+
+type DoctorCheck = {
+  id: string;
+  check: (ctx: DoctorContext) => DoctorIssue | undefined;
+  applyFix?: (ctx: DoctorContext) => Promise<void>;
+};
+
+const DOCTOR_CHECKS: DoctorCheck[] = [
+  {
+    id: "acpx-config-json",
+    check: (ctx) => {
+      if (ctx.acpxConfigError) {
+        return {
+          id: "acpx-config-json",
+          message: `\`${ctx.acpxConfigPath}\` contains invalid JSON. acpx may fail to start.`,
+          fix: `Fix the JSON syntax in \`${ctx.acpxConfigPath}\`, or delete the file to use defaults.`,
+        };
+      }
+      return undefined;
+    },
+  },
+  {
+    id: "acpx-custom-agents",
+    check: (ctx) => {
+      if (!ctx.acpxConfig) return undefined;
+      const agents = ctx.acpxConfig.agents;
+      if (agents && typeof agents === "object" && Object.keys(agents as object).length > 0) {
+        const agentKeys = Object.keys(agents as object).map((k) => `\`${k}\``).join(", ");
+        return {
+          id: "acpx-custom-agents",
+          message:
+            `\`${ctx.acpxConfigPath}\` has custom agent entries: ${agentKeys}.\n`
+            + `  Custom agent configurations (e.g. pointing to a local CLI) can cause session creation to fail with "stdin is not a terminal".`,
+          fix:
+            `Set \`"agents": {}\` in \`${ctx.acpxConfigPath}\` to use the default agent launcher.\n`
+            + `  Run \`/clawspec doctor fix\` to apply this fix automatically.`,
+        };
+      }
+      return undefined;
+    },
+    applyFix: async (ctx) => {
+      if (ctx.acpxConfig) {
+        ctx.acpxConfig.agents = {};
+        await writeJsonFile(ctx.acpxConfigPath, ctx.acpxConfig);
+      }
+    },
+  },
+];
+
+export async function runDoctorCommand(acpxConfigPath: string, rawArgs?: string): Promise<PluginCommandResult> {
+  const action = rawArgs?.trim().toLowerCase();
+
+  let acpxConfig: Record<string, unknown> | null = null;
+  let acpxConfigError = false;
+  const raw = await tryReadUtf8(acpxConfigPath);
+  if (raw !== undefined) {
+    try {
+      acpxConfig = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      acpxConfigError = true;
+    }
+  }
+
+  const ctx: DoctorContext = { acpxConfigPath, acpxConfig, acpxConfigError };
+  const issues: DoctorIssue[] = [];
+  for (const check of DOCTOR_CHECKS) {
+    const issue = check.check(ctx);
+    if (issue) {
+      issues.push(issue);
+    }
+  }
+
+  if (action === "fix") {
+    if (issues.length === 0) {
+      return okReply("Nothing to fix. acpx configuration is already clean.");
+    }
+    const fixable = DOCTOR_CHECKS.filter((c) => c.applyFix && issues.some((i) => i.id === c.id));
+    if (fixable.length === 0) {
+      return errorReply(
+        "Cannot auto-fix the detected issues. Please fix them manually:\n\n"
+        + issues.map((i) => `- ${i.fix}`).join("\n"),
+      );
+    }
+    for (const check of fixable) {
+      await check.applyFix!(ctx);
+    }
+    return okReply(
+      [
+        heading("Doctor Fix Applied"),
+        "",
+        ...fixable.map((c) => {
+          const issue = issues.find((i) => i.id === c.id);
+          return `Fixed: ${issue?.message.split("\n")[0] ?? c.id}`;
+        }),
+        "",
+        "Please retry your previous command.",
+      ].join("\n"),
+    );
+  }
+
+  if (issues.length === 0) {
+    return okReply(
+      [
+        heading("Doctor"),
+        "",
+        "No issues found. acpx configuration looks healthy.",
+      ].join("\n"),
+    );
+  }
+
+  return okReply(
+    [
+      heading("Doctor"),
+      "",
+      `Found ${issues.length} issue${issues.length > 1 ? "s" : ""}:`,
+      "",
+      ...issues.flatMap((issue, i) => [`**${i + 1}.** ${issue.message}`, ""]),
+      "Suggested fixes:",
+      "",
+      ...issues.flatMap((issue, i) => [`**${i + 1}.** ${issue.fix}`, ""]),
+    ].join("\n"),
+  );
 }

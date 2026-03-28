@@ -8,6 +8,7 @@ test("help text only advertises the clawspec command surface", () => {
   assert.match(help, /\/clawspec workspace/);
   assert.match(help, /\/clawspec proposal <change-name> \[description\]/);
   assert.match(help, /\/clawspec continue/);
+  assert.match(help, /\/clawspec doctor/);
   assert.match(help, /\/clawspec detach/);
   assert.match(help, /cs-detach/);
   assert.match(help, /legacy aliases/);
