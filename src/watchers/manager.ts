@@ -2795,7 +2795,7 @@ function parseWorkerProgressEvent(line: string): WorkerProgressEvent | undefined
 
 function formatWorkerProgressMessage(project: ProjectState, event: WorkerProgressEvent): string | undefined {
   const rawMessage = typeof event.message === "string" ? event.message : "";
-  const message = shortenActivityText(rawMessage, 120);
+  const message = shortenActivityText(compactWorkerProgressDisplayPaths(project, rawMessage), 120);
   if (!message) {
     return undefined;
   }
@@ -2914,6 +2914,74 @@ function compactProjectLabel(project: ProjectState): string {
   const projectName = project.projectName ?? "project";
   const changeName = project.changeName ?? "change";
   return `${projectName}-${changeName}`;
+}
+
+function compactWorkerProgressDisplayPaths(project: ProjectState, text: string): string {
+  try {
+    const compactRoot = compactWorkerProgressRoot(project);
+    if (!compactRoot) {
+      return text;
+    }
+
+    let compacted = text;
+    if (project.changeDir) {
+      compacted = replaceDisplayPathPrefix(compacted, project.changeDir, `${compactRoot}:`);
+    }
+    if (project.repoPath) {
+      compacted = replaceDisplayPathPrefix(compacted, project.repoPath, `${compactRoot}:`);
+    }
+    compacted = normalizeCompactedDisplayPaths(compacted, compactRoot);
+    return compacted.length < text.length ? compacted : text;
+  } catch {
+    return text;
+  }
+}
+
+function compactWorkerProgressRoot(project: ProjectState): string | undefined {
+  const changeName = project.changeName?.trim();
+  if (!changeName) {
+    return undefined;
+  }
+  const projectName = project.projectName?.trim()
+    || (project.repoPath ? path.basename(project.repoPath) : undefined)
+    || "project";
+  return `${projectName}@${changeName}`;
+}
+
+function replaceDisplayPathPrefix(text: string, targetPath: string, replacement: string): string {
+  const pattern = buildDisplayPathPrefixPattern(targetPath);
+  if (!pattern) {
+    return text;
+  }
+  return text.replace(pattern, replacement);
+}
+
+function normalizeCompactedDisplayPaths(text: string, compactRoot: string): string {
+  const prefix = escapeRegExp(`${compactRoot}:`);
+  const pattern = new RegExp("(" + prefix + ")([^\\s\"'`,)\\]}]+)", "g");
+  return text.replace(pattern, (_match, prefix: string, suffix: string) => `${prefix}${suffix.replace(/\\/g, "/")}`);
+}
+
+function buildDisplayPathPrefixPattern(targetPath: string): RegExp | undefined {
+  const normalized = normalizeSlashes(targetPath).replace(/\/+$/, "");
+  if (!normalized) {
+    return undefined;
+  }
+
+  const escaped = normalized
+    .split("/")
+    .map((segment) => escapeRegExp(segment))
+    .join("[/\\\\]+");
+  if (!escaped) {
+    return undefined;
+  }
+
+  const flags = /^[A-Za-z]:/.test(normalized) ? "gi" : "g";
+  return new RegExp(`${escaped}(?:[/\\\\]+)?`, flags);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function compactProgressMarker(current?: number, total?: number): string {

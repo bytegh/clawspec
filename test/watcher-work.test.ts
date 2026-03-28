@@ -213,6 +213,174 @@ test("watcher work flow completes", async (t) => {
   assert.equal(workerReadyIndex < taskStartIndex, true);
 });
 
+test("worker progress display compacts absolute paths across separators", async (t) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-work-paths-"));
+  const workspacePath = path.join(tempRoot, "workspace");
+  const repoPath = path.join(workspacePath, "demo-app");
+  const changeName = "watch-work-paths";
+  const changeDir = path.join(repoPath, "openspec", "changes", changeName);
+  const tasksPath = path.join(changeDir, "tasks.md");
+  const specPath = path.join(changeDir, "specs", "md5-hash-api", "spec.md");
+  const outputPath = path.join(repoPath, "src", "demo.txt");
+  const repoStatePaths = getRepoStatePaths(repoPath, "archives");
+  await mkdir(path.dirname(specPath), { recursive: true });
+  await mkdir(path.join(repoPath, "src"), { recursive: true });
+  await writeUtf8(tasksPath, "- [ ] 1.1 Build the demo endpoint\n");
+  await writeUtf8(specPath, "# Spec\n");
+  await writeUtf8(path.join(changeDir, "proposal.md"), "# Proposal\n");
+
+  const rollbackStore = new RollbackStore(repoPath, "archives", changeName);
+  await rollbackStore.initializeBaseline();
+
+  const stateStore = new ProjectStateStore(tempRoot, "archives");
+  await stateStore.initialize();
+  const notifierMessages: string[] = [];
+
+  const fakeOpenSpec = {
+    instructionsApply: async (cwd: string, cn: string) => {
+      const done = (await readUtf8(tasksPath)).includes("- [x] 1.1 Build the demo endpoint");
+      return {
+        command: `openspec instructions apply --change ${cn} --json`,
+        cwd,
+        stdout: "{}",
+        stderr: "",
+        durationMs: 1,
+        parsed: {
+          changeName: cn,
+          changeDir,
+          schemaName: "spec-driven",
+          contextFiles: { proposal: path.join(changeDir, "proposal.md"), tasks: tasksPath },
+          progress: done ? { total: 1, complete: 1, remaining: 0 } : { total: 1, complete: 0, remaining: 1 },
+          tasks: [{ id: "1.1", description: "Build the demo endpoint", done }],
+          state: done ? "all_done" : "ready",
+          instruction: "Implement the remaining task.",
+        },
+      };
+    },
+  } as any;
+
+  const displaySpecPath = specPath.replace(/[\\/]+/g, "\\");
+  const displayOutputPath = outputPath.replace(/[\\/]+/g, "/");
+
+  const fakeAcpClient = {
+    agentId: "codex",
+    runTurn: async (params: {
+      onReady?: () => Promise<void> | void;
+      onEvent?: (event: { type: string; title?: string }) => Promise<void> | void;
+    }) => {
+      await params.onReady?.();
+      const startEvent = JSON.stringify({
+        version: 1,
+        timestamp: new Date().toISOString(),
+        kind: "task_start",
+        current: 1,
+        total: 1,
+        taskId: "1.1",
+        message: `Loaded ${displaySpecPath}. Next: read tasks.`,
+      });
+      await writeUtf8(repoStatePaths.workerProgressFile, `${startEvent}\n`);
+      await params.onEvent?.({ type: "tool_call", title: "worker-progress" });
+
+      await writeUtf8(tasksPath, "- [x] 1.1 Build the demo endpoint\n");
+      await writeUtf8(outputPath, "demo\n");
+
+      const doneEvent = JSON.stringify({
+        version: 1,
+        timestamp: new Date().toISOString(),
+        kind: "task_done",
+        current: 1,
+        total: 1,
+        taskId: "1.1",
+        message: `Done 1.1: built the demo endpoint. Changed 1 files: ${displayOutputPath}. Next: done.`,
+      });
+      await writeUtf8(repoStatePaths.workerProgressFile, `${startEvent}\n${doneEvent}\n`);
+      await writeJsonFile(repoStatePaths.executionResultFile, {
+        version: 1,
+        changeName,
+        mode: "apply",
+        status: "done",
+        timestamp: new Date().toISOString(),
+        summary: "Completed task 1.1.",
+        progressMade: true,
+        completedTask: "1.1 Build the demo endpoint",
+        changedFiles: ["src/demo.txt"],
+        notes: ["Task completed"],
+        taskCounts: { total: 1, complete: 1, remaining: 0 },
+        remainingTasks: 0,
+      });
+    },
+    cancelSession: async () => undefined,
+    closeSession: async () => undefined,
+  };
+
+  const manager = new WatcherManager({
+    stateStore,
+    openSpec: fakeOpenSpec,
+    archiveDirName: "archives",
+    logger: createLogger(),
+    notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
+    acpClient: fakeAcpClient as any,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
+  });
+  t.after(async () => {
+    await manager.stop();
+  });
+
+  const channelKey = "discord:watch-work-paths:default:main";
+  await stateStore.createProject(channelKey);
+  await stateStore.updateProject(channelKey, (current) => ({
+    ...current,
+    workspacePath,
+    repoPath,
+    projectName: "demo-app",
+    projectTitle: "Demo App",
+    changeName,
+    changeDir,
+    status: "armed",
+    phase: "implementing",
+    currentTask: "1.1 Build the demo endpoint",
+    taskCounts: { total: 1, complete: 0, remaining: 1 },
+    planningJournal: { dirty: false, entryCount: 0 },
+    rollback: {
+      baselineRoot: rollbackStore.baselineRoot,
+      manifestPath: rollbackStore.manifestPath,
+      snapshotReady: true,
+      touchedFileCount: 0,
+    },
+    execution: {
+      mode: "apply",
+      action: "work",
+      state: "armed",
+      armedAt: new Date().toISOString(),
+    },
+  }));
+
+  await manager.start();
+  await manager.wake(channelKey);
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(
+        notifierMessages,
+        "Loaded demo-app@watch-work-paths:specs/md5-hash-api/spec.md",
+        "Next: read tasks",
+      )
+      && hasMessage(
+        notifierMessages,
+        "demo-app@watch-work-paths:src/demo.txt",
+        "Next: done",
+      ),
+  );
+
+  const project = await stateStore.getActiveProject(channelKey);
+  assert.equal(
+    notifierMessages.some((message) => message.includes(displaySpecPath) || message.includes(displayOutputPath)),
+    false,
+  );
+  assert.equal(project?.status, "done");
+});
+
 test("worker progress events keep running state in sync before execution finishes", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-work-progress-sync-"));
   const workspacePath = path.join(tempRoot, "workspace");
