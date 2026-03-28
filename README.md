@@ -1,5 +1,11 @@
 # ClawSpec
 
+<p align="center">
+  <a href="https://linux.do" target="_blank">
+    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" />
+  </a>
+</p>
+
 [Chinese (Simplified)](./README.zh-CN.md)
 
 ClawSpec is an OpenClaw plugin that embeds an OpenSpec workflow directly into chat. It splits project control and execution on purpose:
