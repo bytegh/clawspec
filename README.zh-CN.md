@@ -556,6 +556,8 @@ cs-work
 | `/clawspec status` | 任何时候想看一次统一状态快照时 | 输出当前 workspace、project、change、生命周期、任务计数、journal 状态和下一步建议 |
 | `/clawspec archive` | 所有任务完成，准备收尾时 | 校验并归档当前 OpenSpec change，同时清理活动 change 状态 |
 | `/clawspec cancel` | 想放弃当前 change 时 | 按快照恢复已跟踪文件、删除 change、停止执行状态，并清掉活动 change |
+| `/clawspec doctor` | 遇到异常行为时 | 对环境和配置进行自动化诊断，报告检测到的问题并给出修复建议 |
+| `/clawspec doctor fix` | `/clawspec doctor` 检测到可修复问题后 | 自动应用所有支持自动修复的安全修复 |
 
 辅助 host CLI：
 
@@ -868,6 +870,20 @@ cs-detach
 ### Cancel 没有恢复整个仓库
 
 这是设计如此。Cancel 只会恢复 ClawSpec 为当前 change 跟踪的文件快照，而不是做整仓库级别的 Git 还原。
+
+### Worker 报错 "stdin is not a terminal" 或 session 创建无结果
+
+原因：
+
+- `~/.acpx/config.json` 中的 `agents` 字段存在自定义配置（例如 `agents.codex` 指向了本地 CLI 路径）
+- acpx 在非交互式环境下无法通过 raw CLI 方式启动 agent
+
+解决方法：
+
+1. 运行 `/clawspec doctor` 检查配置问题。
+2. 如果 doctor 报告了自定义 agent 配置，运行 `/clawspec doctor fix` 自动修复。
+3. 也可以手动编辑 `~/.acpx/config.json`，将 `"agents"` 设置为 `{}`。
+4. 然后重新运行 `cs-work` 或 `/clawspec continue`。
 
 ## 开发与验证
 

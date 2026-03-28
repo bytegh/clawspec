@@ -552,6 +552,8 @@ That loop is the normal operating model:
 | `/clawspec status` | Any time you want a reconciled project snapshot | Renders current workspace, project, change, lifecycle, task counts, journal status, and next step |
 | `/clawspec archive` | After all tasks are complete and you want to close the change | Validates and archives the finished OpenSpec change, then clears active change state |
 | `/clawspec cancel` | When you want to abandon the active change | Restores tracked files from snapshots, removes the change, stops execution state, and clears the active change |
+| `/clawspec doctor` | When something isn't working as expected | Runs automated diagnostics on your environment and configuration, reports detected issues with suggested fixes |
+| `/clawspec doctor fix` | After `/clawspec doctor` reports a fixable issue | Automatically applies safe fixes for all detected issues that support auto-repair |
 
 Auxiliary host CLI:
 
@@ -857,6 +859,20 @@ Use one of:
 ### Cancel did not revert the whole repo
 
 That is by design. Cancel restores tracked files from the ClawSpec snapshot baseline for the active change. It is intentionally narrower than a blanket Git restore.
+
+### Worker fails with "stdin is not a terminal" or session creation returns no result
+
+Cause:
+
+- `~/.acpx/config.json` has a custom agent entry (e.g. `agents.codex` pointing to a local CLI binary)
+- acpx cannot spawn the agent in a non-interactive environment when it is configured as a raw CLI command
+
+What to do:
+
+1. Run `/clawspec doctor` to check for known configuration issues.
+2. If `/clawspec doctor` reports custom agent entries, run `/clawspec doctor fix` to clear them automatically.
+3. Alternatively, edit `~/.acpx/config.json` manually and set `"agents": {}`.
+4. Retry `cs-work` or `/clawspec continue`.
 
 ## Development And Validation
 
