@@ -1,5 +1,11 @@
 # ClawSpec
 
+<p align="center">
+  <a href="https://linux.do" target="_blank">
+    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" />
+  </a>
+</p>
+
 [English](./README.md)
 
 ClawSpec 是一个把 OpenSpec 工作流嵌入 OpenClaw 聊天窗口的插件。它有意把“项目控制”和“执行触发”分成两层：
