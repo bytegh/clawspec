@@ -149,6 +149,14 @@ export class AcpWorkerClient {
       });
     }
 
+    if (events.length === 0 || !extractSessionIdentifiers(events).backendSessionId) {
+      throw new Error(
+        `Failed to create acpx session for agent "${descriptor.agentId}".\n`
+        + `The session command returned no result. This usually means the agent is misconfigured.\n\n`
+        + `Run \`/clawspec doctor\` to diagnose and fix common acpx configuration issues.`,
+      );
+    }
+
     const identifiers = extractSessionIdentifiers(events);
     const handle: AcpWorkerHandle = {
       sessionKey: descriptor.sessionKey,

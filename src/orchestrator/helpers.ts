@@ -125,6 +125,7 @@ export function buildHelpText(): string {
     "- `/clawspec status`",
     "- `/clawspec archive`",
     "- `/clawspec cancel`",
+    "- `/clawspec doctor`",
     "",
     "Visible chat keywords:",
     "- `cs-plan`",

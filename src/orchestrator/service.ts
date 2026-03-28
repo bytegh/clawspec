@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import type {
   OpenClawConfig,
@@ -236,6 +237,8 @@ export class ClawSpecService {
           return await this.archiveProject(channelKey);
         case "cancel":
           return await this.cancelProject(channelKey);
+        case "doctor":
+          return await this.runDoctor(rest);
         default:
           return errorReply(`Unknown subcommand \`${subcommand}\`.\n\n${buildHelpText()}`);
       }
@@ -1910,6 +1913,87 @@ export class ClawSpecService {
         "",
         `Project: \`${project.projectName}\``,
         "Rollback restored tracked files, removed the change directory, and cleared change-scoped runtime files.",
+      ].join("\n"),
+    );
+  }
+
+  async runDoctor(rawArgs?: string): Promise<PluginCommandResult> {
+    const action = rawArgs?.trim().toLowerCase();
+    const issues: string[] = [];
+    const fixes: string[] = [];
+
+    const acpxConfigPath = path.join(os.homedir(), ".acpx", "config.json");
+    let acpxConfig: Record<string, unknown> | null = null;
+    const raw = await tryReadUtf8(acpxConfigPath);
+    if (raw === undefined) {
+      // No config file - that's fine
+    } else {
+      try {
+        acpxConfig = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        issues.push(`\`${acpxConfigPath}\` contains invalid JSON. acpx may fail to start.`);
+        fixes.push(`Fix the JSON syntax in \`${acpxConfigPath}\`, or delete the file to use defaults.`);
+      }
+    }
+
+    let hasAgentIssue = false;
+    if (acpxConfig) {
+      const agents = acpxConfig.agents;
+      if (agents && typeof agents === "object" && Object.keys(agents as object).length > 0) {
+        hasAgentIssue = true;
+        const agentKeys = Object.keys(agents as object).map((k) => `\`${k}\``).join(", ");
+        issues.push(
+          `\`${acpxConfigPath}\` has custom agent entries: ${agentKeys}.\n`
+          + `  Custom agent configurations (e.g. pointing to a local CLI) can cause session creation to fail with "stdin is not a terminal".`,
+        );
+        fixes.push(
+          `Set \`"agents": {}\` in \`${acpxConfigPath}\` to use the default agent launcher.\n`
+          + `  Run \`/clawspec doctor fix\` to apply this fix automatically.`,
+        );
+      }
+    }
+
+    if (action === "fix") {
+      if (!acpxConfig) {
+        return errorReply("Cannot fix: acpx config file is missing or has invalid JSON. Please fix it manually.");
+      }
+      if (!hasAgentIssue) {
+        return okReply("Nothing to fix. acpx agent configuration is already clean.");
+      }
+      acpxConfig.agents = {};
+      await writeJsonFile(acpxConfigPath, acpxConfig);
+      return okReply(
+        [
+          heading("Doctor Fix Applied"),
+          "",
+          `Cleared custom agent entries in \`${acpxConfigPath}\`.`,
+          "`\"agents\"` is now `{}`. acpx will use the default agent launcher.",
+          "",
+          "Please retry your previous command.",
+        ].join("\n"),
+      );
+    }
+
+    if (issues.length === 0) {
+      return okReply(
+        [
+          heading("Doctor"),
+          "",
+          "No issues found. acpx configuration looks healthy.",
+        ].join("\n"),
+      );
+    }
+
+    return okReply(
+      [
+        heading("Doctor"),
+        "",
+        `Found ${issues.length} issue${issues.length > 1 ? "s" : ""}:`,
+        "",
+        ...issues.flatMap((issue, i) => [`**${i + 1}.** ${issue}`, ""]),
+        "Suggested fixes:",
+        "",
+        ...fixes.flatMap((fix, i) => [`**${i + 1}.** ${fix}`, ""]),
       ].join("\n"),
     );
   }
