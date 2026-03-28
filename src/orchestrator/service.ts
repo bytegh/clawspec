@@ -3378,7 +3378,7 @@ export async function runDoctorCommand(acpxConfigPath: string, rawArgs?: string)
   let acpxConfig: Record<string, unknown> | null = null;
   let acpxConfigError = false;
   const raw = await tryReadUtf8(acpxConfigPath);
-  if (raw !== undefined) {
+  if (raw !== undefined && raw.trim() !== "") {
     try {
       acpxConfig = JSON.parse(raw) as Record<string, unknown>;
     } catch {

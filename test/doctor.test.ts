@@ -54,6 +54,21 @@ test("doctor detects custom agent entries", async () => {
   assert.match(result.text ?? "", /doctor fix/);
 });
 
+test("doctor reports no issues when config file is empty", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-doctor-"));
+  const configDir = path.join(tempRoot, ".acpx");
+  await mkdir(configDir, { recursive: true });
+  const configPath = path.join(configDir, "config.json");
+
+  const { writeUtf8 } = await import("../src/utils/fs.ts");
+  await writeUtf8(configPath, "");
+
+  const result = await runDoctorCommand(configPath);
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.text ?? "", /No issues found/);
+});
+
 test("doctor detects invalid JSON", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-doctor-"));
   const configDir = path.join(tempRoot, ".acpx");
