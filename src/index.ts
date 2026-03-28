@@ -19,6 +19,11 @@ import { WatcherManager } from "./watchers/manager.ts";
 import { ensureOpenSpecCli } from "./dependencies/openspec.ts";
 import { ensureAcpxCli } from "./dependencies/acpx.ts";
 import { getConfiguredDefaultWorkerAgent } from "./acp/openclaw-config.ts";
+import {
+  BootstrapCoordinator,
+  buildBootstrapFailureMessage,
+  buildBootstrapPendingMessage,
+} from "./bootstrap/state.ts";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_BIN_DIR = path.join(PLUGIN_ROOT, "node_modules", ".bin");
@@ -51,6 +56,106 @@ const plugin = {
     });
     let watcherManager: WatcherManager | undefined;
     let service: ClawSpecService | undefined;
+    const bootstrap = new BootstrapCoordinator(
+      async (report) => {
+        let nextWatcherManager: WatcherManager | undefined;
+        try {
+          service = undefined;
+          watcherManager = undefined;
+
+          await report({
+            phase: "initializing",
+            detail: "ClawSpec is initializing local state.",
+          });
+          await ensureDir(pluginStateRoot);
+          await ensureDir(config.defaultWorkspace);
+          await initStores();
+
+          await report({
+            dependency: "openspec",
+            phase: "checking",
+            detail: "ClawSpec is checking the OpenSpec CLI.",
+          });
+          await ensureOpenSpecCli({
+            pluginRoot: PLUGIN_ROOT,
+            logger: api.logger,
+            onInstallStart: async ({ packageName, reason }) => {
+              await report({
+                dependency: "openspec",
+                phase: "installing",
+                detail: `ClawSpec is installing ${packageName} because OpenSpec is unavailable (${reason}).`,
+              });
+            },
+          });
+
+          await report({
+            dependency: "acpx",
+            phase: "checking",
+            detail: "ClawSpec is checking the ACPX CLI.",
+          });
+          const acpx = await ensureAcpxCli({
+            pluginRoot: PLUGIN_ROOT,
+            logger: api.logger,
+            onInstallStart: async ({ packageName, reason, expectedVersion }) => {
+              await report({
+                dependency: "acpx",
+                phase: "installing",
+                detail: `ClawSpec is installing ${packageName}@${expectedVersion} because no compatible ACPX CLI is available (${reason}).`,
+              });
+            },
+          });
+
+          await report({
+            dependency: "service",
+            phase: "starting",
+            detail: "ClawSpec dependencies are ready. Starting services.",
+          });
+          const configuredDefaultWorkerAgent = getConfiguredDefaultWorkerAgent(api.config) ?? "codex";
+          const acpClient = new AcpWorkerClient({
+            agentId: configuredDefaultWorkerAgent,
+            logger: api.logger,
+            command: acpx.command,
+            env: acpx.env,
+          });
+          nextWatcherManager = new WatcherManager({
+            stateStore,
+            openSpec,
+            archiveDirName: config.archiveDirName,
+            logger: api.logger,
+            notifier,
+            acpClient,
+            pollIntervalMs: config.watcherPollIntervalMs,
+          });
+          const nextService = new ClawSpecService({
+            api,
+            config: api.config,
+            logger: api.logger,
+            stateStore,
+            memoryStore,
+            openSpec,
+            archiveDirName: config.archiveDirName,
+            allowedChannels: config.allowedChannels,
+            defaultWorkspace: config.defaultWorkspace,
+            defaultWorkerAgentId: undefined,
+            workspaceStore,
+            watcherManager: nextWatcherManager,
+          });
+          await nextWatcherManager.start();
+          watcherManager = nextWatcherManager;
+          service = nextService;
+        } catch (error) {
+          service = undefined;
+          await nextWatcherManager?.stop();
+          watcherManager = undefined;
+          throw error;
+        }
+      },
+      (error) => {
+        api.logger.error?.(
+          `[clawspec] bootstrap failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
 
     const initStores = () => Promise.all([
       stateStore.initialize(),
@@ -61,51 +166,13 @@ const plugin = {
     api.registerService({
       id: "clawspec.bootstrap",
       async start() {
-        await ensureDir(pluginStateRoot);
-        await ensureDir(config.defaultWorkspace);
-        await initStores();
-        await ensureOpenSpecCli({
-          pluginRoot: PLUGIN_ROOT,
-          logger: api.logger,
-        });
-        const acpx = await ensureAcpxCli({
-          pluginRoot: PLUGIN_ROOT,
-          logger: api.logger,
-        });
-        const configuredDefaultWorkerAgent = getConfiguredDefaultWorkerAgent(api.config) ?? "codex";
-        const acpClient = new AcpWorkerClient({
-          agentId: configuredDefaultWorkerAgent,
-          logger: api.logger,
-          command: acpx.command,
-          env: acpx.env,
-        });
-        watcherManager = new WatcherManager({
-          stateStore,
-          openSpec,
-          archiveDirName: config.archiveDirName,
-          logger: api.logger,
-          notifier,
-          acpClient,
-          pollIntervalMs: config.watcherPollIntervalMs,
-        });
-        service = new ClawSpecService({
-          api,
-          config: api.config,
-          logger: api.logger,
-          stateStore,
-          memoryStore,
-          openSpec,
-          archiveDirName: config.archiveDirName,
-          allowedChannels: config.allowedChannels,
-          defaultWorkspace: config.defaultWorkspace,
-          defaultWorkerAgentId: undefined,
-          workspaceStore,
-          watcherManager,
-        });
-        await watcherManager.start();
+        await bootstrap.start();
       },
       async stop() {
         await watcherManager?.stop();
+        watcherManager = undefined;
+        service = undefined;
+        bootstrap.reset();
       },
     });
 
@@ -137,9 +204,24 @@ const plugin = {
       handler: async (ctx) => {
         await initStores();
         if (!service) {
+          const snapshot = bootstrap.getSnapshot();
+          if (snapshot.status === "failed") {
+            bootstrap.startInBackground();
+            return {
+              ok: false,
+              text: buildBootstrapFailureMessage(snapshot),
+            };
+          }
+          if (snapshot.status === "idle") {
+            bootstrap.startInBackground();
+            return {
+              ok: false,
+              text: buildBootstrapPendingMessage(bootstrap.getSnapshot()),
+            };
+          }
           return {
             ok: false,
-            text: "ClawSpec is still bootstrapping dependencies. Try again in a moment.",
+            text: buildBootstrapPendingMessage(snapshot),
           };
         }
         const subcommand = parseSubcommand(ctx.args);

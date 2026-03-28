@@ -101,10 +101,14 @@ test("ensureAcpxCli prefers the OpenClaw builtin acpx over an incompatible PATH 
 
 test("ensureAcpxCli installs a plugin-local acpx when none is available", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
+  const installEvents: Array<{ packageName: string; reason: string; expectedVersion: string }> = [];
   let localCheckCount = 0;
 
   const result = await ensureAcpxCli({
     pluginRoot: ROOT_PREFIX,
+    onInstallStart: async (event) => {
+      installEvents.push(event);
+    },
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {
@@ -130,4 +134,9 @@ test("ensureAcpxCli installs a plugin-local acpx when none is available", async 
     calls.some((call) => call.command === "npm" && call.args.includes(`${ACPX_PACKAGE_NAME}@${ACPX_EXPECTED_VERSION}`)),
     true,
   );
+  assert.deepEqual(installEvents, [{
+    packageName: ACPX_PACKAGE_NAME,
+    reason: "not found",
+    expectedVersion: ACPX_EXPECTED_VERSION,
+  }]);
 });

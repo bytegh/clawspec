@@ -25,6 +25,7 @@ export type EnsureAcpxCliOptions = {
   runner?: CommandRunner;
   expectedVersion?: string;
   runtimeEntrypoint?: string;
+  onInstallStart?: (info: { packageName: string; reason: string; expectedVersion: string }) => void | Promise<void>;
 };
 
 export type EnsureAcpxCliResult = {
@@ -104,6 +105,11 @@ export async function ensureAcpxCli(
   options.logger?.warn?.(
     `[clawspec] acpx CLI not ready (${globalCheck.message}); installing plugin-local ${ACPX_PACKAGE_NAME}@${expectedVersion}`,
   );
+  await options.onInstallStart?.({
+    packageName: ACPX_PACKAGE_NAME,
+    reason: globalCheck.message,
+    expectedVersion,
+  });
 
   const install = await runner({
     command: "npm",

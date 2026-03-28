@@ -22,6 +22,7 @@ export type EnsureOpenSpecCliOptions = {
   logger?: PluginLogger;
   env?: NodeJS.ProcessEnv;
   runner?: CommandRunner;
+  onInstallStart?: (info: { packageName: string; reason: string }) => void | Promise<void>;
 };
 
 export type EnsureOpenSpecCliResult = {
@@ -72,6 +73,10 @@ export async function ensureOpenSpecCli(
   options.logger?.warn?.(
     `[clawspec] openspec CLI not ready (${globalCheck.message}); installing plugin-local ${OPENSPEC_PACKAGE_NAME}`,
   );
+  await options.onInstallStart?.({
+    packageName: OPENSPEC_PACKAGE_NAME,
+    reason: globalCheck.message,
+  });
 
   const install = await runner({
     command: "npm",

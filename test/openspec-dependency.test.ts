@@ -35,8 +35,12 @@ test("ensureOpenSpecCli uses the global openspec command when available", async 
 
 test("ensureOpenSpecCli installs plugin-local openspec when local and global are unavailable", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
+  const installEvents: Array<{ packageName: string; reason: string }> = [];
   const result = await ensureOpenSpecCli({
     pluginRoot: ROOT_PREFIX,
+    onInstallStart: async (event) => {
+      installEvents.push(event);
+    },
     runner: async ({ command, args }) => {
       calls.push({ command, args });
       if (command === LOCAL_COMMAND) {
@@ -59,6 +63,10 @@ test("ensureOpenSpecCli installs plugin-local openspec when local and global are
   assert.equal(result.source, "local");
   assert.equal(result.version, "1.2.3");
   assert.equal(calls.some((call) => call.command === "npm"), true);
+  assert.deepEqual(installEvents, [{
+    packageName: "@fission-ai/openspec",
+    reason: "not found",
+  }]);
 });
 
 test("buildOpenSpecInstallMessage includes install command", () => {
