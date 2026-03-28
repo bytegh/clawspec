@@ -678,13 +678,6 @@ export class ClawSpecService {
         repoStatePaths.planningJournalSnapshotFile,
         project.planningJournal?.lastSyncedAt,
       );
-      const snapshot = await journalStore.readSnapshot(repoStatePaths.planningJournalSnapshotFile);
-      const digest = await journalStore.digest(project.changeName);
-      this.logger.info(`[clawspec] cs-work check for ${project.changeName}:`);
-      this.logger.info(`  - hasUnsyncedChanges: ${hasUnsyncedChanges}`);
-      this.logger.info(`  - Snapshot: entryCount=${snapshot?.entryCount}, lastEntryAt=${snapshot?.lastEntryAt}, hash=${snapshot?.contentHash?.slice(0, 8)}`);
-      this.logger.info(`  - Current digest: entryCount=${digest.entryCount}, lastEntryAt=${digest.lastEntryAt}, hash=${digest.contentHash.slice(0, 8)}`);
-      this.logger.info(`  - fallbackLastSyncedAt: ${project.planningJournal?.lastSyncedAt}`);
       if (!hasUnsyncedChanges) {
         const isDetached = !isProjectContextAttached(project);
         if (isDetached) {
@@ -761,7 +754,6 @@ export class ClawSpecService {
     userPrompt: string,
     mode: ExecutionMode,
   ): Promise<{ prependContext?: string; prependSystemContext?: string } | PluginCommandResult> {
-    this.logger.info(`[clawspec] startVisiblePlanningSync called for ${project.changeName}`);
     void project;
     void mode;
 
@@ -784,7 +776,6 @@ export class ClawSpecService {
       execution: undefined,
       lastExecutionAt: startedAt,
     }));
-    this.logger.info(`[clawspec] Project state updated: status=planning, phase=planning_sync, boundSessionKey=${runningProject.boundSessionKey}`);
 
     return await this.buildPlanningSyncInjection(runningProject, userPrompt, prepared.instructionResults);
   }
@@ -967,7 +958,6 @@ export class ClawSpecService {
     const planningProject = await this.findPlanningProjectBySessionKey(ctx.sessionKey)
       ?? await this.findPlanningProjectByContext(ctx);
     if (planningProject) {
-      this.logger.info(`[clawspec] agent_end: found planning project ${planningProject.changeName}, calling finalizePlanningTurn`);
       await this.finalizePlanningTurn(planningProject, event);
       return;
     }
@@ -2420,7 +2410,6 @@ export class ClawSpecService {
   }
 
   private async finalizePlanningTurn(project: ProjectState, event: AgentEndEvent): Promise<void> {
-    this.logger.info(`[clawspec] finalizePlanningTurn called for ${project.changeName}, success=${event.success}`);
     if (!project.repoPath || !project.changeName) {
       this.logger.warn(`[clawspec] finalizePlanningTurn skipped: missing repoPath or changeName`);
       return;
@@ -2482,8 +2471,6 @@ export class ClawSpecService {
     }
 
     const snapshot = await journalStore.writeSnapshot(repoStatePaths.planningJournalSnapshotFile, project.changeName, timestamp);
-    this.logger.info(`[clawspec] Planning snapshot written for ${project.changeName}: entryCount=${snapshot.entryCount}, lastEntryAt=${snapshot.lastEntryAt}`);
-    this.logger.info(`[clawspec] Updating project state: status=${status}, phase=${phase}, dirty=${journalDirty}`);
     await this.writeLatestSummary(repoStatePaths, latestSummary);
 
     const finalized = await this.stateStore.updateProject(project.channelKey, (current) => ({
