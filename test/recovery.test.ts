@@ -1,14 +1,17 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir } from "node:fs/promises";
-import { pathExists, readUtf8, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
+import { pathExists, readJsonFile, readUtf8, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
 import { getRepoStatePaths } from "../src/utils/paths.ts";
 import { RollbackStore } from "../src/rollback/store.ts";
 import { ProjectStateStore } from "../src/state/store.ts";
 import { WatcherManager } from "../src/watchers/manager.ts";
 import { createLogger, waitFor } from "./helpers/harness.ts";
+
+const TEST_WATCHER_POLL_INTERVAL_MS = 250;
+const TEST_WAIT_TIMEOUT_MS = 15_000;
 
 function createWorkOpenSpec(changeDir: string, tasksPath: string) {
   return {
@@ -39,7 +42,25 @@ function createWorkOpenSpec(changeDir: string, tasksPath: string) {
   } as any;
 }
 
-test("recovery from orphaned state (armed, no execution field)", async () => {
+function registerManagerCleanup(t: TestContext, manager: WatcherManager): () => Promise<void> {
+  let stopped = false;
+  const stop = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    await manager.stop();
+  };
+  t.after(stop);
+  return stop;
+}
+
+async function waitForProjectStatus(repoPath: string, status: "done", timeoutMs = TEST_WAIT_TIMEOUT_MS): Promise<void> {
+  const stateFile = getRepoStatePaths(repoPath, "archives").stateFile;
+  await waitFor(async () => (await readJsonFile<any>(stateFile, null))?.status === status, timeoutMs);
+}
+
+test("recovery from orphaned state (armed, no execution field)", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-orphan-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -105,12 +126,13 @@ test("recovery from orphaned state (armed, no execution field)", async () => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   await manager.start();
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "done");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
@@ -120,7 +142,7 @@ test("recovery from orphaned state (armed, no execution field)", async () => {
   assert.equal(await pathExists(path.join(clawspecDir, "state.json.12345.999999.tmp")), false);
 });
 
-test("recovery from mid-crash running state", async () => {
+test("recovery from mid-crash running state", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-midcrash-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -178,19 +200,20 @@ test("recovery from mid-crash running state", async () => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   await manager.start();
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "done");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
   assert.equal(notifierMessages.some((m) => m.includes("Gateway restarted")), true);
 });
 
-test("startup recovery adopts a live implementation session instead of spawning a new worker", async () => {
+test("startup recovery adopts a live implementation session instead of spawning a new worker", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-adopt-live-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -274,8 +297,9 @@ test("startup recovery adopts a live implementation session instead of spawning 
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   setTimeout(() => {
     void (async () => {
@@ -308,8 +332,8 @@ test("startup recovery adopts a live implementation session instead of spawning 
   }, 120);
 
   await manager.start();
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "done");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
@@ -328,7 +352,7 @@ test("startup recovery adopts a live implementation session instead of spawning 
   assert.equal(notifierMessages.some((m) => m.includes("Watcher active. Starting codex worker")), false);
 });
 
-test("recovery from recoverable blocked implementation state", async () => {
+test("recovery from recoverable blocked implementation state", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-blocked-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -421,12 +445,13 @@ test("recovery from recoverable blocked implementation state", async () => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   await manager.start();
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "done");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
@@ -435,7 +460,7 @@ test("recovery from recoverable blocked implementation state", async () => {
   assert.equal(notifierMessages.some((m) => m.includes("All tasks complete")), true);
 });
 
-test("rearm never drops execution field (batch mode)", async () => {
+test("rearm never drops execution field (batch mode)", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-rearm-safe-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -497,13 +522,14 @@ test("rearm never drops execution field (batch mode)", async () => {
     logger: createLogger(),
     notifier: { send: async () => undefined } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "done");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "done");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "done");
@@ -511,7 +537,7 @@ test("rearm never drops execution field (batch mode)", async () => {
   assert.equal(turnCount, 1);
 });
 
-test("startup recovery does not spawn a worker for visible chat planning", async () => {
+test("startup recovery does not spawn a worker for visible chat planning", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-recovery-visible-plan-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -561,12 +587,13 @@ test("startup recovery does not spawn a worker for visible chat planning", async
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   await manager.start();
   await new Promise((resolve) => setTimeout(resolve, 150));
-  await manager.stop();
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(runCount, 0);

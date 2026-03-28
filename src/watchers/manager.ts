@@ -823,7 +823,7 @@ class ExecutionWatcher {
         },
       };
     });
-    await this.writeExecutionControl(this.channelKey);
+    await this.writeExecutionControl(queued);
     const nextPlanningStep = nextForcedArtifactId
       ? (nextPlanningArtifactId(forcedArtifactIds, selectedArtifactId) ?? await this.describeNextPlanningStep(queued))
       : await this.describeNextPlanningStep(queued);
@@ -1024,7 +1024,7 @@ class ExecutionWatcher {
         },
       };
     });
-    await this.writeExecutionControl(this.channelKey);
+    await this.writeExecutionControl(queued);
     return true;
   }
 
@@ -1207,14 +1207,15 @@ class ExecutionWatcher {
       return { runError };
     }
 
-    await debugLog(`Calling acpClient.runTurn`, {
-      sessionKey,
-      cwd: project.repoPath,
-      agentId: workerAgentId,
-      promptLength: prompt.length,
-      acpxCommand: this.acpClient.command,
-      acpxEnv: this.acpClient.env,
-    });
+    this.logger.debug?.(
+      `[clawspec] calling acpClient.runTurn: ${JSON.stringify({
+        sessionKey,
+        cwd: project.repoPath,
+        agentId: workerAgentId,
+        promptLength: prompt.length,
+        acpxCommand: this.acpClient.command,
+      })}`,
+    );
 
     const runTurnPromise = this.acpClient.runTurn({
       sessionKey,
@@ -1648,7 +1649,7 @@ class ExecutionWatcher {
       },
     }));
 
-    await this.writeExecutionControl(this.channelKey);
+    await this.writeExecutionControl(recovered);
     await this.notify(
       recovered,
       buildWatcherStatusMessage(
@@ -1709,7 +1710,7 @@ class ExecutionWatcher {
         lastFailure: current.execution?.lastFailure,
       },
     }));
-    await this.writeExecutionControl(this.channelKey);
+    await this.writeExecutionControl(updated);
     return updated;
   }
 
@@ -1953,8 +1954,10 @@ class ExecutionWatcher {
     };
   }
 
-  private async writeExecutionControl(channelKey: string): Promise<void> {
-    const project = await this.stateStore.getActiveProject(channelKey);
+  private async writeExecutionControl(projectOrChannelKey: string | ProjectState): Promise<void> {
+    const project = typeof projectOrChannelKey === "string"
+      ? await this.stateStore.getActiveProject(projectOrChannelKey)
+      : projectOrChannelKey;
     if (!project?.repoPath || !project.changeName || !project.execution) {
       return;
     }

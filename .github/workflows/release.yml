@@ -51,8 +51,11 @@ jobs:
       - name: Check plugin entry
         run: npm run check
 
-      - name: Run tests
-        run: npm test
+      - name: Run fast tests
+        run: npm run test:fast
+
+      - name: Run slow tests
+        run: npm run test:slow
 
       - name: Pack tarball
         run: npm pack

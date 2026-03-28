@@ -1,14 +1,17 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir } from "node:fs/promises";
-import { pathExists, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
+import { pathExists, readJsonFile, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
 import { PlanningJournalStore } from "../src/planning/journal.ts";
 import { getRepoStatePaths } from "../src/utils/paths.ts";
 import { ProjectStateStore } from "../src/state/store.ts";
 import { WatcherManager } from "../src/watchers/manager.ts";
 import { createLogger, waitFor } from "./helpers/harness.ts";
+
+const TEST_WATCHER_POLL_INTERVAL_MS = 1_000;
+const TEST_WAIT_TIMEOUT_MS = 35_000;
 
 function createPlanningOpenSpec(changeDir: string, proposalPath: string) {
   return {
@@ -71,7 +74,29 @@ function createPlanningOpenSpec(changeDir: string, proposalPath: string) {
   } as any;
 }
 
-test("watcher planning flow completes", async () => {
+function registerManagerCleanup(t: TestContext, manager: WatcherManager): () => Promise<void> {
+  let stopped = false;
+  const stop = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    await manager.stop();
+  };
+  t.after(stop);
+  return stop;
+}
+
+async function waitForProjectStatus(
+  repoPath: string,
+  status: "ready" | "done" | "blocked" | "planning" | "armed" | "running",
+  timeoutMs = TEST_WAIT_TIMEOUT_MS,
+): Promise<void> {
+  const stateFile = getRepoStatePaths(repoPath, "archives").stateFile;
+  await waitFor(async () => (await readJsonFile<any>(stateFile, null))?.status === status, timeoutMs);
+}
+
+test("watcher planning flow completes", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-plan-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -113,8 +138,9 @@ test("watcher planning flow completes", async () => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   const channelKey = "discord:watch-plan:default:main";
   await stateStore.createProject(channelKey);
@@ -143,8 +169,8 @@ test("watcher planning flow completes", async () => {
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "ready");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "ready");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "ready");
@@ -155,7 +181,7 @@ test("watcher planning flow completes", async () => {
   assert.equal(notifierMessages.some((m) => m.includes("Planning ready") && m.includes("Next: run `cs-work` to start implementation")), true);
 });
 
-test("planning fallback normalizes artifact path", async () => {
+test("planning fallback normalizes artifact path", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-plan-fallback-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -215,8 +241,9 @@ test("planning fallback normalizes artifact path", async () => {
       cancelSession: async () => undefined,
       closeSession: async () => undefined,
     } as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   const channelKey = "discord:watch-plan-fallback:default:main";
   await stateStore.createProject(channelKey);
@@ -230,14 +257,14 @@ test("planning fallback normalizes artifact path", async () => {
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "ready");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "ready");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.deepEqual(project?.lastExecution?.changedFiles, ["openspec/changes/watch-plan-fallback/proposal.md"]);
 });
 
-test("watcher force-refreshes planning artifacts when journal is dirty and OpenSpec reports all artifacts done", async () => {
+test("watcher force-refreshes planning artifacts when journal is dirty and OpenSpec reports all artifacts done", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-plan-forced-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -358,8 +385,9 @@ test("watcher force-refreshes planning artifacts when journal is dirty and OpenS
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   const channelKey = "discord:watch-plan-forced:default:main";
   await stateStore.createProject(channelKey);
@@ -398,8 +426,8 @@ test("watcher force-refreshes planning artifacts when journal is dirty and OpenS
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "ready");
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "ready");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.deepEqual(runOrder, ["proposal", "specs", "design", "tasks"]);
@@ -412,7 +440,7 @@ test("watcher force-refreshes planning artifacts when journal is dirty and OpenS
   );
 });
 
-test("watcher restarts planning worker after ACP runtime exit", async () => {
+test("watcher restarts planning worker after ACP runtime exit", async (t) => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clawspec-watcher-plan-restart-"));
   const workspacePath = path.join(tempRoot, "workspace");
   const repoPath = path.join(workspacePath, "demo-app");
@@ -460,8 +488,9 @@ test("watcher restarts planning worker after ACP runtime exit", async () => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
+  const stopManager = registerManagerCleanup(t, manager);
 
   const channelKey = "discord:watch-plan-restart:default:main";
   await stateStore.createProject(channelKey);
@@ -490,8 +519,8 @@ test("watcher restarts planning worker after ACP runtime exit", async () => {
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => (await stateStore.getActiveProject(channelKey))?.status === "ready", 8_000);
-  await manager.stop();
+  await waitForProjectStatus(repoPath, "ready");
+  await stopManager();
 
   const project = await stateStore.getActiveProject(channelKey);
   assert.equal(project?.status, "ready");

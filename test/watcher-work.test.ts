@@ -3,15 +3,30 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir } from "node:fs/promises";
-import { pathExists, readUtf8, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
+import { pathExists, readJsonFile, readUtf8, writeJsonFile, writeUtf8 } from "../src/utils/fs.ts";
 import { getRepoStatePaths } from "../src/utils/paths.ts";
 import { RollbackStore } from "../src/rollback/store.ts";
 import { ProjectStateStore } from "../src/state/store.ts";
 import { WatcherManager, describeWorkerStartupTimeout, shouldAbortWorkerStartup } from "../src/watchers/manager.ts";
 import { createLogger, waitFor } from "./helpers/harness.ts";
 
+const TEST_WATCHER_POLL_INTERVAL_MS = 1_000;
+const TEST_WAIT_TIMEOUT_MS = 60_000;
+
 function hasMessage(messages: string[], ...parts: string[]): boolean {
   return messages.some((message) => parts.every((part) => message.includes(part)));
+}
+
+async function readProjectState(repoPath: string) {
+  return await readJsonFile<any>(getRepoStatePaths(repoPath, "archives").stateFile, null);
+}
+
+async function waitForProjectState(
+  repoPath: string,
+  predicate: (project: any) => boolean,
+  timeoutMs = TEST_WAIT_TIMEOUT_MS,
+): Promise<void> {
+  await waitFor(async () => predicate(await readProjectState(repoPath)), timeoutMs);
 }
 
 test("queue owner unavailable is treated as a non-fatal startup state", () => {
@@ -129,7 +144,7 @@ test("watcher work flow completes", async (t) => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -166,9 +181,11 @@ test("watcher work flow completes", async (t) => {
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done"
-    && hasMessage(notifierMessages, "demo-app-watch-work", "All tasks complete", "/clawspec archive"),
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work", "All tasks complete", "/clawspec archive"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -325,7 +342,7 @@ test("worker progress events keep running state in sync before execution finishe
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -362,20 +379,17 @@ test("worker progress events keep running state in sync before execution finishe
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () => {
-    const project = await stateStore.getActiveProject(channelKey);
-    return project?.status === "running"
+  await waitForProjectState(repoPath, (project) =>
+    project?.status === "running"
       && project.taskCounts?.complete === 1
       && project.taskCounts?.remaining === 1
       && project.currentTask === "1.2 Add multipart parsing"
       && project.latestSummary?.includes("Start 1.2") === true
-      && project.execution?.currentTaskId === "1.2";
-  });
+      && project.execution?.currentTaskId === "1.2",
+  );
 
   releaseFinalStep();
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-  );
+  await waitForProjectState(repoPath, (project) => project?.status === "done");
 
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-progress-sync", "1/2", "Done 1.1"), true);
   assert.equal(hasMessage(notifierMessages, "demo-app-watch-work-progress-sync", "2/2", "Start 1.2"), true);
@@ -483,7 +497,7 @@ test("watcher restarts implementation worker after ACP runtime exit", async (t) 
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -520,10 +534,11 @@ test("watcher restarts implementation worker after ACP runtime exit", async (t) 
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done"
-    && hasMessage(notifierMessages, "demo-app-watch-work-restart", "All tasks complete", "/clawspec archive"),
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-restart", "All tasks complete", "/clawspec archive"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -651,7 +666,7 @@ test("watcher restarts a dead ACP session after progress stalls", async (t) => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -688,9 +703,11 @@ test("watcher restarts a dead ACP session after progress stalls", async (t) => {
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-dead-session", "All tasks complete", "/clawspec archive"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -798,7 +815,7 @@ test("watcher restarts a dead ACP session that dies before first progress", asyn
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -835,9 +852,11 @@ test("watcher restarts a dead ACP session that dies before first progress", asyn
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-dead-startup", "All tasks complete", "/clawspec archive"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -958,7 +977,7 @@ test("status-only ACP heartbeats do not keep a dead session alive", async (t) =>
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -995,9 +1014,11 @@ test("status-only ACP heartbeats do not keep a dead session alive", async (t) =>
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-status-heartbeats", "All tasks complete"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -1124,7 +1145,7 @@ test("dead ACP session that ignores abort is restarted without hanging the watch
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     if (heartbeatTimer) {
@@ -1165,9 +1186,11 @@ test("dead ACP session that ignores abort is restarted without hanging the watch
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-hung-dead-session", "All tasks complete"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -1205,7 +1228,7 @@ test("manager stop closes active worker sessions and rearms project recovery sta
         closedSessions.push({ sessionKey, reason });
       },
     } as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
 
   const channelKey = "discord:watch-stop:default:main";
@@ -1309,7 +1332,7 @@ test("watcher stops retrying after 10 ACP restart attempts", async (t) => {
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -1347,9 +1370,11 @@ test("watcher stops retrying after 10 ACP restart attempts", async (t) => {
   }));
 
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "blocked",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "blocked"
+      && hasMessage(notifierMessages, "demo-app-watch-work-restart-cap", "Blocked after 10 ACP restart attempts"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -1415,7 +1440,7 @@ test("watcher blocked message includes ACPX setup guidance when backend stays un
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -1453,9 +1478,11 @@ test("watcher blocked message includes ACPX setup guidance when backend stays un
   }));
 
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "blocked",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "blocked"
+      && hasMessage(notifierMessages, "demo-app-watch-work-backend-blocked", "Blocked: ACPX backend unavailable"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -1545,7 +1572,7 @@ test("watcher retries when ACP runtime backend is temporarily unavailable", asyn
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -1581,9 +1608,11 @@ test("watcher retries when ACP runtime backend is temporarily unavailable", asyn
   }));
 
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done",
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-backend-unavailable", "All tasks complete"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);
@@ -1689,7 +1718,7 @@ test("watcher finalizes when terminal result exists before ACP turn exits", asyn
     logger: createLogger(),
     notifier: { send: async (_: string, text: string) => { notifierMessages.push(text); } } as any,
     acpClient: fakeAcpClient as any,
-    pollIntervalMs: 25,
+    pollIntervalMs: TEST_WATCHER_POLL_INTERVAL_MS,
   });
   t.after(async () => {
     await manager.stop();
@@ -1726,10 +1755,11 @@ test("watcher finalizes when terminal result exists before ACP turn exits", asyn
 
   await manager.start();
   await manager.wake(channelKey);
-  await waitFor(async () =>
-    (await stateStore.getActiveProject(channelKey))?.status === "done"
-    && hasMessage(notifierMessages, "demo-app-watch-work-terminal", "All tasks complete"),
-    8_000,
+  await waitForProjectState(
+    repoPath,
+    (project) =>
+      project?.status === "done"
+      && hasMessage(notifierMessages, "demo-app-watch-work-terminal", "All tasks complete"),
   );
 
   const project = await stateStore.getActiveProject(channelKey);

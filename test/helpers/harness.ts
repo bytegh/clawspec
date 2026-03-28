@@ -55,13 +55,17 @@ export function createLogger() {
   };
 }
 
-export async function waitFor(check: () => Promise<boolean>, timeoutMs = 4_000): Promise<void> {
+export async function waitFor(
+  check: () => Promise<boolean>,
+  timeoutMs = 4_000,
+  pollIntervalMs = 250,
+): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (await check()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
   throw new Error("Timed out waiting for test condition.");
 }
