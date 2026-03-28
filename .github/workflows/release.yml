@@ -85,6 +85,53 @@ jobs:
       - name: Publish to npm with trusted publishing
         run: npm publish --access public
 
+  publish_clawhub:
+    name: Publish ClawHub package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - verify
+      - publish_npm
+    permissions:
+      contents: read
+    env:
+      CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify ClawHub token is configured
+        shell: bash
+        run: |
+          if [[ -z "${CLAWHUB_TOKEN}" ]]; then
+            echo "Missing CLAWHUB_TOKEN secret. Add it in GitHub repository settings before releasing."
+            exit 1
+          fi
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub
+
+      - name: Login to ClawHub
+        run: clawhub login --token "${CLAWHUB_TOKEN}"
+
+      - name: Verify ClawHub identity
+        run: clawhub whoami
+
+      - name: Publish package to ClawHub
+        shell: bash
+        run: |
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          clawhub --no-input package publish . \
+            --source-repo "${GITHUB_REPOSITORY}" \
+            --source-commit "${SOURCE_COMMIT}"
+
   create_release:
     name: Create GitHub release
     runs-on: ubuntu-latest
@@ -92,6 +139,7 @@ jobs:
     needs:
       - verify
       - publish_npm
+      - publish_clawhub
     permissions:
       contents: write
     env:
