@@ -115,22 +115,21 @@ jobs:
             exit 1
           fi
 
-      - name: Install ClawHub CLI
-        run: npm install -g clawhub
-
       - name: Login to ClawHub
-        run: clawhub login --token "${CLAWHUB_TOKEN}"
+        run: npx clawhub@latest login --token "${CLAWHUB_TOKEN}" --no-browser
 
       - name: Verify ClawHub identity
-        run: clawhub whoami
+        run: npx clawhub@latest whoami
 
       - name: Publish package to ClawHub
         shell: bash
         run: |
-          SOURCE_COMMIT="$(git rev-parse HEAD)"
-          clawhub --no-input package publish . \
+          npx clawhub@latest --no-input package publish . \
+            --family code-plugin \
+            --version "${{ needs.verify.outputs.package_version }}" \
             --source-repo "${GITHUB_REPOSITORY}" \
-            --source-commit "${SOURCE_COMMIT}"
+            --source-commit "${GITHUB_SHA}" \
+            --source-ref "${GITHUB_REF_NAME}"
 
   create_release:
     name: Create GitHub release
